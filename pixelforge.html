@@ -604,6 +604,97 @@ function exportPNG(){
   log('Exported PNG','ok');
 }
 
+function captureId(raw){
+  if(raw&&String(raw).trim())return String(raw).trim();
+  return 'snapshot_'+new Date().toISOString().replace(/[:.]/g,'-');
+}
+
+function clampSnapshotScale(raw){
+  const n=parseInt(raw);
+  if(isNaN(n))return 16;
+  return Math.max(1,Math.min(32,n));
+}
+
+function hexByte(v){
+  return v.toString(16).padStart(2,'0');
+}
+
+function readPixelMatrix(){
+  const img=ctx.getImageData(0,0,gridSize,gridSize);
+  const d=img.data;
+  const rows=[];
+  for(let y=0;y<gridSize;y++){
+    const row=[];
+    for(let x=0;x<gridSize;x++){
+      const i=(y*gridSize+x)*4;
+      const a=d[i+3];
+      if(a===0)row.push(null);
+      else if(a===255)row.push('#'+hexByte(d[i])+hexByte(d[i+1])+hexByte(d[i+2]));
+      else row.push('#'+hexByte(d[i])+hexByte(d[i+1])+hexByte(d[i+2])+hexByte(a));
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function capturePayload(id){
+  const list=mode==='pixelart'?frames:categories[currentCat]?.frames||[];
+  return {
+    id,
+    mode,
+    gridSize,
+    currentFrame:currentFrame+1,
+    bgColor,
+    currentColor,
+    currentAlpha,
+    tool,
+    frameCount:list.length,
+    categories:categories.map(c=>c.name),
+    currentCategory:mode==='sprite'?categories[currentCat]?.name:null,
+    timestamp:new Date().toISOString(),
+    pixels:readPixelMatrix()
+  };
+}
+
+function snapshotDataUrl(scale){
+  const out=document.createElement('canvas');
+  out.width=gridSize*scale;
+  out.height=gridSize*scale;
+  const oc=out.getContext('2d');
+  oc.imageSmoothingEnabled=false;
+  if(bgColor!=='transparent'){
+    oc.fillStyle=bgColor;
+    oc.fillRect(0,0,out.width,out.height);
+  }
+  oc.drawImage(mc,0,0,out.width,out.height);
+  return out.toDataURL('image/png');
+}
+
+async function postCapture(path,payload){
+  const r=await fetch(path,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  });
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
+  return data;
+}
+
+async function pushSnapshot(id,scale){
+  const payload=capturePayload(id);
+  payload.scale=scale;
+  payload.png=snapshotDataUrl(scale);
+  const data=await postCapture('/snapshot',payload);
+  log('Snapshot saved: '+data.id,'ok');
+}
+
+async function pushState(id){
+  const payload=capturePayload(id);
+  const data=await postCapture('/state',payload);
+  log('State saved: '+data.id,'ok');
+}
+
 function log(msg,type='ok'){
   const d=document.getElementById('term-log');
   const p=document.createElement('p');
@@ -615,7 +706,7 @@ function log(msg,type='ok'){
 
 const COMMANDS={
   help:()=>{
-    log('Commands: help, clear, color <hex>, setpixel <x> <y> [color], getpixel <x> <y>, fill <x> <y> [color], drawline <x0> <y0> <x1> <y1>, drawrect <x0> <y0> <x1> <y1>, addframe, nextframe, prevframe, listframes, setframe <n>, setmode <pixelart|sprite>, setsize <16|32|48|64>, addcat <name>, setcat <name>, setbg <hex|transparent>, zoom <n>, export, alpha <0-255>','info');
+    log('Commands: help, clear, color <hex>, setpixel <x> <y> [color], getpixel <x> <y>, fill <x> <y> [color], drawline <x0> <y0> <x1> <y1>, drawrect <x0> <y0> <x1> <y1>, addframe, nextframe, prevframe, listframes, setframe <n>, setmode <pixelart|sprite>, setsize <16|32|48|64>, addcat <name>, setcat <name>, setbg <hex|transparent>, zoom <n>, export, snapshot [id] [scale], statepush [id], alpha <0-255>','info');
   },
   clear:()=>clearCanvas(),
   color:([hex])=>{if(!hex){log('Usage: color <hex>','err');return;}setColor(hex);log('Color: '+hex,'ok');},
@@ -747,6 +838,15 @@ const COMMANDS={
       drawPixel(x,y);
     }
     log('Batch pixels done','ok');
+  },
+  snapshot:async([id,scale])=>{
+    const capture=captureId(id);
+    const n=clampSnapshotScale(scale);
+    await pushSnapshot(capture,n);
+  },
+  statepush:async([id])=>{
+    const capture=captureId(id);
+    await pushState(capture);
   }
 };
 
@@ -754,8 +854,14 @@ function execCmd(raw){
   const parts=raw.trim().split(/\s+/);
   const cmd=parts[0].toLowerCase();
   const args=parts.slice(1);
-  if(COMMANDS[cmd]) COMMANDS[cmd](args);
-  else log('Unknown command: '+cmd+' (type help)','err');
+  if(COMMANDS[cmd]){
+    try{
+      const result=COMMANDS[cmd](args);
+      if(result&&typeof result.catch==='function')result.catch(e=>log(e.message||String(e),'err'));
+    }catch(e){
+      log(e.message||String(e),'err');
+    }
+  } else log('Unknown command: '+cmd+' (type help)','err');
 }
 
 function handleTermKey(e){

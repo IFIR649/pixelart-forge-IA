@@ -4,10 +4,14 @@ Corre la app en localhost:3000 y acepta comandos via HTTP.
 Uso: python server.py
 """
 import http.server
+import base64
+import binascii
 import json
 import os
+import re
 import threading
 import webbrowser
+from datetime import datetime
 from urllib.parse import urlparse
 
 HOST = "localhost"
@@ -18,6 +22,77 @@ command_queue = []
 command_lock = threading.Lock()
 
 HTML_FILE = "pixelforge.html"
+SNAPSHOT_DIR = "snapshots"
+
+latest_snapshot = None
+
+
+def safe_capture_id(raw_id=None):
+    if raw_id:
+        capture_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(raw_id).strip())
+        capture_id = capture_id.strip("._-")
+        if capture_id:
+            return capture_id[:80]
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def snapshot_path(filename):
+    return os.path.abspath(os.path.join(SNAPSHOT_DIR, filename))
+
+
+def strip_data_url(data_url):
+    prefix = "data:image/png;base64,"
+    if not isinstance(data_url, str) or not data_url.startswith(prefix):
+        raise ValueError("Campo 'png' debe ser un data URL PNG base64")
+    try:
+        png_bytes = base64.b64decode(data_url[len(prefix):], validate=True)
+    except binascii.Error as exc:
+        raise ValueError("PNG base64 inválido") from exc
+    if not png_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("El payload decodificado no es un PNG válido")
+    return png_bytes
+
+
+def capture_metadata(payload, capture_id):
+    metadata = {k: v for k, v in payload.items() if k != "png"}
+    metadata["id"] = capture_id
+    metadata["savedAt"] = datetime.now().isoformat(timespec="seconds")
+    return metadata
+
+
+def save_capture_json(capture_id, metadata):
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    json_file = snapshot_path(f"{capture_id}.json")
+    current_json = snapshot_path("current.json")
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    with open(current_json, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+    return json_file, current_json
+
+
+def save_capture_png(capture_id, png_bytes):
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    png_file = snapshot_path(f"{capture_id}.png")
+    current_png = snapshot_path("current.png")
+    with open(png_file, "wb") as f:
+        f.write(png_bytes)
+    with open(current_png, "wb") as f:
+        f.write(png_bytes)
+    return png_file, current_png
+
+
+def set_latest_capture(capture_id, metadata, png_file=None, json_file=None):
+    global latest_snapshot
+    latest_snapshot = {
+        "id": capture_id,
+        "pngPath": os.path.abspath(png_file) if png_file else None,
+        "jsonPath": os.path.abspath(json_file) if json_file else None,
+        "currentPngPath": snapshot_path("current.png") if png_file else None,
+        "currentJsonPath": snapshot_path("current.json"),
+        "metadata": {k: v for k, v in metadata.items() if k != "pixels"},
+    }
+    return latest_snapshot
 
 class PixelForgeHandler(http.server.BaseHTTPRequestHandler):
 
@@ -71,6 +146,23 @@ class PixelForgeHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok", "port": PORT}).encode())
 
+        # Última captura recibida desde el navegador
+        elif path == "/snapshot/latest":
+            data = latest_snapshot
+            if data is None and os.path.exists(snapshot_path("current.json")):
+                with open(snapshot_path("current.json"), "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+                current_png = snapshot_path("current.png")
+                data = {
+                    "id": metadata.get("id"),
+                    "pngPath": current_png if os.path.exists(current_png) else None,
+                    "jsonPath": snapshot_path("current.json"),
+                    "currentPngPath": current_png if os.path.exists(current_png) else None,
+                    "currentJsonPath": snapshot_path("current.json"),
+                    "metadata": {k: v for k, v in metadata.items() if k != "pixels"},
+                }
+            self._json_response(200, {"ok": True, "latest": data})
+
         else:
             self.send_error(404)
 
@@ -109,6 +201,56 @@ class PixelForgeHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 self._json_response(400, {"error": "JSON inválido"})
 
+        # POST /snapshot — PNG renderizado + estado
+        elif path == "/snapshot":
+            try:
+                data = json.loads(body)
+                if not isinstance(data, dict):
+                    self._json_response(400, {"error": "JSON debe ser un objeto"})
+                    return
+                capture_id = safe_capture_id(data.get("id"))
+                png_bytes = strip_data_url(data.get("png"))
+                metadata = capture_metadata(data, capture_id)
+                png_file, current_png = save_capture_png(capture_id, png_bytes)
+                json_file, current_json = save_capture_json(capture_id, metadata)
+                latest = set_latest_capture(capture_id, metadata, png_file, json_file)
+                print(f"  SNAPSHOT: {capture_id}")
+                self._json_response(200, {
+                    "ok": True,
+                    "id": capture_id,
+                    "pngPath": png_file,
+                    "jsonPath": json_file,
+                    "currentPngPath": current_png,
+                    "currentJsonPath": current_json,
+                    "latest": latest,
+                })
+            except json.JSONDecodeError:
+                self._json_response(400, {"error": "JSON inválido"})
+            except ValueError as exc:
+                self._json_response(400, {"error": str(exc)})
+
+        # POST /state — estado/píxeles sin PNG
+        elif path == "/state":
+            try:
+                data = json.loads(body)
+                if not isinstance(data, dict):
+                    self._json_response(400, {"error": "JSON debe ser un objeto"})
+                    return
+                capture_id = safe_capture_id(data.get("id"))
+                metadata = capture_metadata(data, capture_id)
+                json_file, current_json = save_capture_json(capture_id, metadata)
+                latest = set_latest_capture(capture_id, metadata, None, json_file)
+                print(f"  STATE: {capture_id}")
+                self._json_response(200, {
+                    "ok": True,
+                    "id": capture_id,
+                    "jsonPath": json_file,
+                    "currentJsonPath": current_json,
+                    "latest": latest,
+                })
+            except json.JSONDecodeError:
+                self._json_response(400, {"error": "JSON inválido"})
+
         else:
             self.send_error(404)
 
@@ -131,6 +273,9 @@ def main():
     print("    GET  /         — abre la app")
     print("    POST /cmd      — {\"cmd\": \"setpixel 5 5 #ff0000\"}")
     print("    POST /batch    — {\"commands\": [\"color #ff0\", \"setpixel 0 0\"]}")
+    print("    POST /snapshot — guarda PNG + estado desde el navegador")
+    print("    POST /state    — guarda estado/píxeles desde el navegador")
+    print("    GET  /snapshot/latest — última captura guardada")
     print("    GET  /poll     — la app consume comandos (interno)")
     print("    GET  /status   — health check")
     print("  Ctrl+C para detener\n")

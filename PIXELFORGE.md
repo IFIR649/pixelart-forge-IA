@@ -52,6 +52,9 @@ PF-SetPixel 10 10 "#ff0000"
 | GET | `/poll` | La app consume comandos pendientes (interno) |
 | POST | `/cmd` | Envía un comando |
 | POST | `/batch` | Envía múltiples comandos en una sola llamada |
+| POST | `/snapshot` | Recibe PNG renderizado + estado desde la app |
+| POST | `/state` | Recibe estado/píxeles sin PNG |
+| GET | `/snapshot/latest` | Devuelve la última captura guardada |
 
 ### POST /cmd
 ```json
@@ -71,6 +74,33 @@ Respuesta:
 { "ok": true, "count": 3, "queued": 3 }
 ```
 
+### POST /snapshot
+Lo llama la app al ejecutar `snapshot [id] [scale]`.
+
+```json
+{
+  "id": "snapshot_20260418_120000_000",
+  "mode": "pixelart",
+  "gridSize": 48,
+  "currentFrame": 1,
+  "bgColor": "#0e1116",
+  "pixels": [[null, "#ff0000"]],
+  "png": "data:image/png;base64,..."
+}
+```
+
+Guarda:
+- `snapshots/<id>.png`
+- `snapshots/<id>.json`
+- `snapshots/current.png`
+- `snapshots/current.json`
+
+### POST /state
+Lo llama la app al ejecutar `statepush [id]`. Guarda JSON con estado y matriz de píxeles, sin PNG.
+
+### GET /snapshot/latest
+Devuelve el último `id`, rutas absolutas y metadatos de la captura más reciente.
+
 ---
 
 ## Comandos disponibles
@@ -86,6 +116,8 @@ Respuesta:
 | `zoom` | `<4–24>` | Nivel de zoom visual |
 | `export` | — | Exporta el frame actual como PNG |
 | `getstate` | — | Devuelve JSON con el estado completo |
+| `snapshot` | `[id] [scale]` | Envía PNG escalado + estado al servidor |
+| `statepush` | `[id]` | Envía estado/píxeles al servidor sin PNG |
 
 ### Color
 
@@ -148,6 +180,8 @@ PF-SetMode   pixelart|sprite       # Cambiar modo
 PF-SetSize   16|32|48|64           # Tamaño canvas
 PF-SetBg     "#hex"|transparent    # Fondo
 PF-Zoom      4..24                 # Zoom
+PF-Snapshot  [-Scale 16]           # Pide PNG renderizado y devuelve rutas
+PF-State                           # Pide JSON de estado/píxeles
 
 PF-Demo                            # Corre el demo de personaje incluido
 ```
@@ -199,6 +233,20 @@ PF-Batch @(
 # 4. Exportar
 PF-Export
 ```
+
+### Revisar visualmente el canvas
+
+```powershell
+# La app debe estar abierta en http://localhost:3000
+$snap = PF-Snapshot -Scale 16
+$snap.PngPath
+
+# Solo estado/píxeles, sin PNG
+$state = PF-State
+$state.JsonPath
+```
+
+Las capturas se guardan en `snapshots/`. `current.png` y `current.json` siempre apuntan a la última captura recibida.
 
 ### Crear sprite animado
 

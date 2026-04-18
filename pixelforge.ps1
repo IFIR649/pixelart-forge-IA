@@ -76,6 +76,79 @@ function PF-SetSize  { param([int]$s)    PF-Cmd "setsize $s" }
 function PF-SetBg    { param([string]$c) PF-Cmd "setbg $c" }
 function PF-Zoom     { param([int]$z)    PF-Cmd "zoom $z" }
 
+function PF-Root {
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    return (Get-Location).Path
+}
+
+function PF-NewCaptureId {
+    return "snapshot_$(Get-Date -Format 'yyyyMMdd_HHmmss_fff')"
+}
+
+function PF-WaitForFile {
+    param(
+        [string]$Path,
+        [int]$TimeoutSec = 8
+    )
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
+        if (Test-Path -LiteralPath $Path) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+function PF-Snapshot {
+    param(
+        [int]$Scale = 16,
+        [int]$TimeoutSec = 8
+    )
+    $Scale = [Math]::Max(1, [Math]::Min(32, $Scale))
+    $id = PF-NewCaptureId
+    $root = PF-Root
+    $png = Join-Path $root "snapshots\$id.png"
+    $json = Join-Path $root "snapshots\$id.json"
+
+    PF-Cmd "snapshot $id $Scale" | Out-Null
+
+    if (-not (PF-WaitForFile -Path $png -TimeoutSec $TimeoutSec)) {
+        Write-Host "  ERR snapshot: no llegó $png en ${TimeoutSec}s. Abre http://localhost:3000 para que la app consuma comandos." -ForegroundColor Red
+        return $null
+    }
+
+    $result = [pscustomobject]@{
+        Id = $id
+        PngPath = (Resolve-Path -LiteralPath $png).Path
+        JsonPath = if (Test-Path -LiteralPath $json) { (Resolve-Path -LiteralPath $json).Path } else { $null }
+        CurrentPngPath = Join-Path $root "snapshots\current.png"
+        CurrentJsonPath = Join-Path $root "snapshots\current.json"
+    }
+    Write-Host "  SNAPSHOT: $($result.PngPath)" -ForegroundColor Cyan
+    return $result
+}
+
+function PF-State {
+    param([int]$TimeoutSec = 8)
+    $id = PF-NewCaptureId
+    $root = PF-Root
+    $json = Join-Path $root "snapshots\$id.json"
+
+    PF-Cmd "statepush $id" | Out-Null
+
+    if (-not (PF-WaitForFile -Path $json -TimeoutSec $TimeoutSec)) {
+        Write-Host "  ERR state: no llegó $json en ${TimeoutSec}s. Abre http://localhost:3000 para que la app consuma comandos." -ForegroundColor Red
+        return $null
+    }
+
+    $result = [pscustomobject]@{
+        Id = $id
+        JsonPath = (Resolve-Path -LiteralPath $json).Path
+        CurrentJsonPath = Join-Path $root "snapshots\current.json"
+    }
+    Write-Host "  STATE: $($result.JsonPath)" -ForegroundColor Cyan
+    return $result
+}
+
 # ── Demo: dibuja un personaje simple 32x32 ──────────────────
 
 function PF-Demo {
