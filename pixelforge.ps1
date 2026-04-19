@@ -131,6 +131,83 @@ function PF-Polyline {
     PF-Cmd ("polyline " + (($Args | ForEach-Object { [string]$_ }) -join " "))
 }
 
+function PF-Stroke {
+    param([int]$size)
+    PF-Cmd "stroke $size"
+}
+
+function PF-Polygon {
+    param([Parameter(ValueFromRemainingArguments=$true)][object[]]$Args)
+    if (-not $Args -or $Args.Count -lt 6) {
+        Write-Host "  Usage: PF-Polygon x1 y1 x2 y2 x3 y3 [... color]" -ForegroundColor Yellow
+        return
+    }
+    PF-Cmd ("polygon " + (($Args | ForEach-Object { [string]$_ }) -join " "))
+}
+
+function PF-FillPoly {
+    param([Parameter(ValueFromRemainingArguments=$true)][object[]]$Args)
+    if (-not $Args -or $Args.Count -lt 6) {
+        Write-Host "  Usage: PF-FillPoly x1 y1 x2 y2 x3 y3 [... color]" -ForegroundColor Yellow
+        return
+    }
+    PF-Cmd ("fillpoly " + (($Args | ForEach-Object { [string]$_ }) -join " "))
+}
+
+function PF-Arc {
+    param([int]$cx,[int]$cy,[int]$rx,[int]$ry,[int]$startDeg,[int]$endDeg,[string]$color="")
+    $cmd = "arc $cx $cy $rx $ry $startDeg $endDeg"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-Curve {
+    param([int]$x0,[int]$y0,[int]$cx,[int]$cy,[int]$x1,[int]$y1,[string]$color="")
+    $cmd = "curve $x0 $y0 $cx $cy $x1 $y1"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-Gradient {
+    param([int]$x,[int]$y,[int]$w,[int]$h,[string]$from,[string]$to,[string]$direction="v")
+    PF-Cmd "gradient $x $y $w $h $from $to $direction"
+}
+
+function PF-Copy {
+    param([int]$x,[int]$y,[int]$w,[int]$h)
+    PF-Cmd "copy $x $y $w $h"
+}
+
+function PF-Paste {
+    param([int]$x,[int]$y)
+    PF-Cmd "paste $x $y"
+}
+
+function PF-Translate {
+    param([int]$x,[int]$y,[int]$w,[int]$h,[int]$dx,[int]$dy)
+    PF-Cmd "translate $x $y $w $h $dx $dy"
+}
+
+function PF-MirrorX {
+    param([int]$x,[int]$y,[int]$w,[int]$h)
+    PF-Cmd "mirrorx $x $y $w $h"
+}
+
+function PF-MirrorY {
+    param([int]$x,[int]$y,[int]$w,[int]$h)
+    PF-Cmd "mirrory $x $y $w $h"
+}
+
+function PF-Rotate90 {
+    param([int]$x,[int]$y,[int]$w,[int]$h,[string]$direction="cw")
+    PF-Cmd "rotate90 $x $y $w $h $direction"
+}
+
+function PF-LoadState {
+    param([string]$id="current")
+    PF-Cmd "loadstate $id"
+}
+
 function PF-Clear    { PF-Cmd "clear" }
 function PF-AddFrame { PF-Cmd "addframe" }
 function PF-NextFrame{ PF-Cmd "nextframe" }

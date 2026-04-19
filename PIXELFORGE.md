@@ -55,6 +55,8 @@ PF-SetPixel 10 10 "#ff0000"
 | POST | `/snapshot` | Recibe PNG renderizado + estado desde la app |
 | POST | `/state` | Recibe estado/píxeles sin PNG |
 | GET | `/snapshot/latest` | Devuelve la última captura guardada |
+| GET | `/snapshot/state/current` | Devuelve `current.json` completo para `loadstate` |
+| GET | `/snapshot/state/<id>` | Devuelve `snapshots/<id>.json` completo para `loadstate` |
 
 ### POST /cmd
 ```json
@@ -101,6 +103,9 @@ Lo llama la app al ejecutar `statepush [id]`. Guarda JSON con estado y matriz de
 ### GET /snapshot/latest
 Devuelve el último `id`, rutas absolutas y metadatos de la captura más reciente.
 
+### GET /snapshot/state/current y /snapshot/state/&lt;id&gt;
+Devuelve el JSON completo guardado, incluyendo `pixels`, para que la app pueda ejecutar `loadstate`.
+
 ---
 
 ## Comandos disponibles
@@ -118,6 +123,7 @@ Devuelve el último `id`, rutas absolutas y metadatos de la captura más recient
 | `getstate` | — | Devuelve JSON con el estado completo |
 | `snapshot` | `[id] [scale]` | Envía PNG escalado + estado al servidor |
 | `statepush` | `[id]` | Envía estado/píxeles al servidor sin PNG |
+| `loadstate` | `[current\|id]` | Carga un estado guardado desde `snapshots/` |
 
 ### Color
 
@@ -131,6 +137,7 @@ Devuelve el último `id`, rutas absolutas y metadatos de la captura más recient
 | Comando | Argumentos | Descripción |
 |---------|-----------|-------------|
 | `brush` | `<1–32>` | Define tamaño de brocha cuadrada centrada para `setpixel`, lápiz y borrador |
+| `stroke` | `<1–32>` | Define grosor de trazos vectoriales |
 | `setpixel` | `<x> <y> [#hex]` | Pinta un píxel |
 | `setpixels` | `<x> <y> <#hex> ...` | Pinta múltiples píxeles (batch inline) |
 | `getpixel` | `<x> <y>` | Consulta el color de un píxel |
@@ -146,8 +153,25 @@ Devuelve el último `id`, rutas absolutas y metadatos de la captura más recient
 | `ellipse` | `<cx> <cy> <rx> <ry> [#hex]` | Dibuja una elipse de borde |
 | `fillellipse` | `<cx> <cy> <rx> <ry> [#hex]` | Dibuja una elipse rellena |
 | `polyline` | `<x1> <y1> <x2> <y2> ... [#hex]` | Dibuja líneas conectadas |
+| `polygon` | `<x1> <y1> <x2> <y2> <x3> <y3> ... [#hex]` | Dibuja un polígono cerrado |
+| `fillpoly` | `<x1> <y1> <x2> <y2> <x3> <y3> ... [#hex]` | Dibuja un polígono relleno |
+| `arc` | `<cx> <cy> <rx> <ry> <startDeg> <endDeg> [#hex]` | Dibuja un arco elíptico |
+| `curve` | `<x0> <y0> <cx> <cy> <x1> <y1> [#hex]` | Dibuja una curva Bézier cuadrática |
+| `gradient` | `<x> <y> <w> <h> <#from> <#to> [h\|v]` | Pinta un degradado pixelado |
 
 > El argumento `[#hex]` es opcional. Si se omite, se usa el color activo.
+> `brush` afecta lápiz, borrador y `setpixel`; `stroke` afecta trazos vectoriales.
+
+### Transformaciones
+
+| Comando | Argumentos | Descripción |
+|---------|-----------|-------------|
+| `copy` | `<x> <y> <w> <h>` | Copia una selección al clipboard interno |
+| `paste` | `<x> <y>` | Pega el clipboard interno |
+| `translate` | `<x> <y> <w> <h> <dx> <dy>` | Mueve una selección y limpia el origen |
+| `mirrorx` | `<x> <y> <w> <h>` | Refleja una selección horizontalmente |
+| `mirrory` | `<x> <y> <w> <h>` | Refleja una selección verticalmente |
+| `rotate90` | `<x> <y> <w> <h> [cw\|ccw]` | Rota una selección 90 grados |
 
 ### Frames y animación
 
@@ -187,6 +211,19 @@ PF-FillCircle cx cy radio [color]   # Círculo relleno
 PF-Ellipse   cx cy rx ry [color]    # Elipse de borde
 PF-FillEllipse cx cy rx ry [color]  # Elipse rellena
 PF-Polyline  x1 y1 x2 y2 ... [color]
+PF-Stroke    size                  # Grosor de trazos vectoriales
+PF-Polygon   x1 y1 x2 y2 x3 y3 ... [color]
+PF-FillPoly  x1 y1 x2 y2 x3 y3 ... [color]
+PF-Arc       cx cy rx ry start end [color]
+PF-Curve     x0 y0 cx cy x1 y1 [color]
+PF-Gradient  x y w h from to [h|v]
+PF-Copy      x y w h
+PF-Paste     x y
+PF-Translate x y w h dx dy
+PF-MirrorX   x y w h
+PF-MirrorY   x y w h
+PF-Rotate90  x y w h [cw|ccw]
+PF-LoadState [current|id]
 
 PF-Clear                           # Limpiar canvas
 PF-AddFrame                        # Nuevo frame
@@ -258,6 +295,38 @@ PF-Batch @(
     "fillellipse 24 30 14 6 #1f8a5b",
     "polyline 10 20 4 32 8 38 18 40 #c084fc"
 )
+```
+
+### Trazos, polígonos, curvas y gradientes
+
+```powershell
+PF-Batch @(
+    "stroke 3",
+    "polygon 8 8 24 4 30 18 14 26 #7dd3fc",
+    "fillpoly 36 8 55 14 48 30 34 25 #4c1d95",
+    "arc 32 32 20 12 200 340 #f0abfc",
+    "curve 6 52 28 34 55 50 #ff8800",
+    "gradient 4 4 12 20 #0f172a #7c3aed v"
+)
+```
+
+### Transformar selecciones
+
+```powershell
+PF-Batch @(
+    "copy 4 4 16 16",
+    "paste 28 4",
+    "mirrorx 28 4 16 16",
+    "rotate90 28 4 16 16 cw",
+    "translate 4 4 16 16 0 24"
+)
+```
+
+### Cargar un estado guardado
+
+```powershell
+PF-Cmd "loadstate current"
+PF-Cmd "loadstate snapshot_20260418_181307_478"
 ```
 
 ### Revisar visualmente el canvas
@@ -346,13 +415,14 @@ PF-Batch @(
 ```
 
 **Jerarquía de eficiencia:**
-1. `block`, `rectxy`, `fillcircle`, `fillellipse` — mejor para masas grandes
-2. `polyline`, `drawline`, `ellipse`, `circle` — mejor para siluetas y contornos
-3. `fillrect` — mejor para áreas rectangulares por coordenadas absolutas
-4. `fill` — mejor para rellenar áreas irregulares ya dibujadas
-5. `dot` / `brush` — mejor para detalles de tamaño fijo
-6. `setpixels x y c x y c ...` — batch inline para puntos sueltos
-7. `setpixel` — solo para píxeles individuales específicos
+1. `gradient`, `fillpoly`, `block`, `rectxy`, `fillcircle`, `fillellipse` — mejor para masas grandes
+2. `polygon`, `polyline`, `arc`, `curve`, `drawline`, `ellipse`, `circle` — mejor para siluetas y contornos
+3. `copy`, `paste`, `translate`, `mirrorx`, `mirrory`, `rotate90` — mejor para repetir o variar formas
+4. `fillrect` — mejor para áreas rectangulares por coordenadas absolutas
+5. `fill` — mejor para rellenar áreas irregulares ya dibujadas
+6. `dot` / `brush` — mejor para detalles de tamaño fijo
+7. `setpixels x y c x y c ...` — batch inline para puntos sueltos
+8. `setpixel` — solo para píxeles individuales específicos
 
 ---
 
@@ -365,6 +435,7 @@ PF-Batch @(
   "currentColor": "#e94560",
   "currentAlpha": 255,
   "brushSize": 1,
+  "strokeSize": 1,
   "bgColor": "#1a1a2e",
   "currentFrame": 1,
   "tool": "pencil",
@@ -385,6 +456,9 @@ PF-Batch @(
 - El frame activo se guarda automáticamente al dibujar
 - `setpixel` y `drawline` usan el **color activo** si no se especifica color
 - `brush` afecta `setpixel`, lápiz y borrador; las formas vectoriales mantienen su grosor propio
+- `stroke` afecta líneas, rectángulos de borde, círculos, elipses, polígonos, arcos y curvas
+- Las transformaciones usan selección explícita `x y w h`
+- `loadstate` carga desde `snapshots/current.json` o `snapshots/<id>.json`
 - Coordenadas fuera de rango se ignoran silenciosamente
 - Al cambiar `setsize` se **borran todos los frames** — hacerlo primero
 

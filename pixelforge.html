@@ -161,13 +161,13 @@ const PALETTE = ['#000000','#ffffff','#ff0000','#00ff00','#0000ff','#ffff00','#f
 '#16213e','#0f3460','#53a8d2','#2d6a4f','#1b4332','#d4a017','#8b0000','#006400',
 '#1a1a2e','#ffd700','#ff69b4','#7b2d8b','#e07b39','#3d5a80','#98c1d9','#ee6c4d'];
 
-let mode='pixelart', tool='pencil', currentColor='#e94560', currentAlpha=255, brushSize=1;
+let mode='pixelart', tool='pencil', currentColor='#e94560', currentAlpha=255, brushSize=1, strokeSize=1;
 let gridSize=32, zoom=10, isDrawing=false, lastX=-1, lastY=-1;
 let bgColor='#000000', showGrid=true;
 let frames=[], currentFrame=0;
 let categories=[{name:'idle',frames:[]}], currentCat=0;
 let animPlaying=false, animFrame=0, animTimer=null, fps=8;
-let startX=-1, startY=-1, previewPixels=null;
+let startX=-1, startY=-1, previewPixels=null, clipboardPixels=null;
 
 const mc=document.getElementById('main-canvas');
 const gc=document.getElementById('grid-canvas');
@@ -240,6 +240,15 @@ function getPos(e){
 function hexToRgba(hex,a=255){
   let h=hex.replace('#','');
   if(h.length===3)h=h.split('').map(x=>x+x).join('');
+  if(h.length===4)h=h.split('').map(x=>x+x).join('');
+  if(h.length===8){
+    return [
+      parseInt(h.slice(0,2),16),
+      parseInt(h.slice(2,4),16),
+      parseInt(h.slice(4,6),16),
+      parseInt(h.slice(6,8),16)
+    ];
+  }
   const n=parseInt(h,16);
   return [n>>16&255,(n>>8)&255,n&255,a];
 }
@@ -249,8 +258,8 @@ function paintPixel(x,y,color=currentColor,a=currentAlpha){
   if(color==='transparent'||a===0){
     ctx.clearRect(x,y,1,1);
   } else {
-    const [r,g,b]=hexToRgba(color);
-    ctx.fillStyle=`rgba(${r},${g},${b},${a/255})`;
+    const [r,g,b,pa]=hexToRgba(color,a);
+    ctx.fillStyle=`rgba(${r},${g},${b},${pa/255})`;
     ctx.fillRect(x,y,1,1);
   }
   return true;
@@ -278,6 +287,37 @@ function validSize(v,min=1,max=32){
   return n;
 }
 
+function parseNumberList(values){
+  return values.map(parseIntValue);
+}
+
+function parsePointArgs(args,minPoints=2){
+  const parsed=splitTrailingColor(args);
+  const values=parseNumberList(parsed.values);
+  if(values.length<minPoints*2||values.length%2!==0||values.some(v=>v===null))return null;
+  const points=[];
+  for(let i=0;i<values.length;i+=2) points.push([values[i],values[i+1]]);
+  return {points,color:parsed.color};
+}
+
+function rgbHex(color){
+  const [r,g,b]=hexToRgba(color);
+  return [r,g,b];
+}
+
+function rgbToHex(r,g,b){
+  return '#'+[r,g,b].map(v=>Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+}
+
+function blendHex(from,to,t){
+  const a=rgbHex(from),b=rgbHex(to);
+  return rgbToHex(
+    a[0]+(b[0]-a[0])*t,
+    a[1]+(b[1]-a[1])*t,
+    a[2]+(b[2]-a[2])*t
+  );
+}
+
 function paintBlockXY(x,y,w,h,color=currentColor,a=currentAlpha){
   let changed=false;
   for(let yy=0;yy<h;yy++){
@@ -292,6 +332,73 @@ function paintCenteredBlock(cx,cy,w,h,color=currentColor,a=currentAlpha){
   const x=Math.floor(cx-(w-1)/2);
   const y=Math.floor(cy-(h-1)/2);
   return paintBlockXY(x,y,w,h,color,a);
+}
+
+function paintStrokePixel(x,y,color=currentColor,a=currentAlpha,size=strokeSize){
+  if(size<=1)return paintPixel(x,y,color,a);
+  return paintCenteredBlock(x,y,size,size,color,a);
+}
+
+function clampSelection(x,y,w,h){
+  const x0=Math.max(0,Math.min(gridSize,x));
+  const y0=Math.max(0,Math.min(gridSize,y));
+  const x1=Math.max(0,Math.min(gridSize,x+w));
+  const y1=Math.max(0,Math.min(gridSize,y+h));
+  return {x:x0,y:y0,w:Math.max(0,x1-x0),h:Math.max(0,y1-y0)};
+}
+
+function clearSelection(x,y,w,h){
+  const s=clampSelection(x,y,w,h);
+  if(!s.w||!s.h)return false;
+  ctx.clearRect(s.x,s.y,s.w,s.h);
+  return true;
+}
+
+function copySelection(x,y,w,h){
+  const s=clampSelection(x,y,w,h);
+  if(!s.w||!s.h)return null;
+  return {width:s.w,height:s.h,data:ctx.getImageData(s.x,s.y,s.w,s.h)};
+}
+
+function pasteSelection(x,y,clip){
+  if(!clip)return false;
+  ctx.putImageData(clip.data,x,y);
+  return true;
+}
+
+function mirrorSelection(x,y,w,h,axis){
+  const clip=copySelection(x,y,w,h);
+  if(!clip)return false;
+  const out=ctx.createImageData(clip.width,clip.height);
+  const src=clip.data.data,dst=out.data;
+  for(let yy=0;yy<clip.height;yy++){
+    for(let xx=0;xx<clip.width;xx++){
+      const sx=axis==='x'?clip.width-1-xx:xx;
+      const sy=axis==='y'?clip.height-1-yy:yy;
+      const si=(sy*clip.width+sx)*4,di=(yy*clip.width+xx)*4;
+      dst[di]=src[si];dst[di+1]=src[si+1];dst[di+2]=src[si+2];dst[di+3]=src[si+3];
+    }
+  }
+  ctx.putImageData(out,x,y);
+  return true;
+}
+
+function rotateSelection90(x,y,w,h,dir='cw'){
+  const clip=copySelection(x,y,w,h);
+  if(!clip)return false;
+  const out=ctx.createImageData(clip.height,clip.width);
+  const src=clip.data.data,dst=out.data;
+  for(let yy=0;yy<clip.height;yy++){
+    for(let xx=0;xx<clip.width;xx++){
+      const dx=dir==='ccw'?yy:clip.height-1-yy;
+      const dy=dir==='ccw'?clip.width-1-xx:xx;
+      const si=(yy*clip.width+xx)*4,di=(dy*out.width+dx)*4;
+      dst[di]=src[si];dst[di+1]=src[si+1];dst[di+2]=src[si+2];dst[di+3]=src[si+3];
+    }
+  }
+  clearSelection(x,y,w,h);
+  ctx.putImageData(out,x,y);
+  return true;
 }
 
 function drawPixel(x,y,color=currentColor,a=currentAlpha){
@@ -327,11 +434,11 @@ function fill(x,y,targetColor,fillColor){
   saveFrameData();
 }
 
-function drawLinePixels(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
+function drawLinePixels(x0,y0,x1,y1,color=currentColor,a=currentAlpha,size=strokeSize){
   let dx=Math.abs(x1-x0),dy=Math.abs(y1-y0);
   let sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx-dy;
   while(true){
-    paintPixel(x0,y0,color,a);
+    paintStrokePixel(x0,y0,color,a,size);
     if(x0===x1&&y0===y1)break;
     let e2=2*err;
     if(e2>-dy){err-=dy;x0+=sx;}
@@ -339,11 +446,11 @@ function drawLinePixels(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
   }
 }
 
-function drawRect(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
+function drawRect(x0,y0,x1,y1,color=currentColor,a=currentAlpha,size=strokeSize){
   const minx=Math.min(x0,x1),maxx=Math.max(x0,x1);
   const miny=Math.min(y0,y1),maxy=Math.max(y0,y1);
-  for(let x=minx;x<=maxx;x++){paintPixel(x,miny,color,a);paintPixel(x,maxy,color,a);}
-  for(let y=miny;y<=maxy;y++){paintPixel(minx,y,color,a);paintPixel(maxx,y,color,a);}
+  for(let x=minx;x<=maxx;x++){paintStrokePixel(x,miny,color,a,size);paintStrokePixel(x,maxy,color,a,size);}
+  for(let y=miny;y<=maxy;y++){paintStrokePixel(minx,y,color,a,size);paintStrokePixel(maxx,y,color,a,size);}
 }
 
 function fillRectInclusive(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
@@ -368,15 +475,23 @@ function drawFilledCircle(cx,cy,r,color=currentColor,a=currentAlpha){
   return changed;
 }
 
-function drawEllipsePixels(cx,cy,rx,ry,color=currentColor,a=currentAlpha){
+function drawCirclePixels(cx,cy,r,color=currentColor,a=currentAlpha,size=strokeSize){
+  let x=r,y=0,err=0;
+  while(x>=y){
+    [[cx+x,cy+y],[cx+y,cy+x],[cx-y,cy+x],[cx-x,cy+y],[cx-x,cy-y],[cx-y,cy-x],[cx+y,cy-x],[cx+x,cy-y]].forEach(([px,py])=>paintStrokePixel(px,py,color,a,size));
+    if(err<=0){y++;err+=2*y+1;}else{x--;err-=2*x+1;}
+  }
+}
+
+function drawEllipsePixels(cx,cy,rx,ry,color=currentColor,a=currentAlpha,size=strokeSize){
   const steps=Math.max(12,Math.ceil(Math.max(rx,ry)*8));
   let prev=null;
   for(let i=0;i<=steps;i++){
     const t=(Math.PI*2*i)/steps;
     const x=Math.round(cx+Math.cos(t)*rx);
     const y=Math.round(cy+Math.sin(t)*ry);
-    if(!prev) paintPixel(x,y,color,a);
-    else if(prev[0]!==x||prev[1]!==y) drawLinePixels(prev[0],prev[1],x,y,color,a);
+    if(!prev) paintStrokePixel(x,y,color,a,size);
+    else if(prev[0]!==x||prev[1]!==y) drawLinePixels(prev[0],prev[1],x,y,color,a,size);
     prev=[x,y];
   }
 }
@@ -392,10 +507,83 @@ function drawFilledEllipse(cx,cy,rx,ry,color=currentColor,a=currentAlpha){
   return changed;
 }
 
-function drawPolylinePixels(points){
+function drawPolylinePixels(points,color=currentColor,a=currentAlpha,size=strokeSize){
   for(let i=0;i<points.length-1;i++){
-    drawLinePixels(points[i][0],points[i][1],points[i+1][0],points[i+1][1]);
+    drawLinePixels(points[i][0],points[i][1],points[i+1][0],points[i+1][1],color,a,size);
   }
+}
+
+function drawPolygonPixels(points,color=currentColor,a=currentAlpha,size=strokeSize){
+  drawPolylinePixels(points,color,a,size);
+  const first=points[0],last=points[points.length-1];
+  drawLinePixels(last[0],last[1],first[0],first[1],color,a,size);
+}
+
+function fillPolygonPixels(points,color=currentColor,a=currentAlpha){
+  let changed=false;
+  const ys=points.map(p=>p[1]);
+  const minY=Math.max(0,Math.floor(Math.min(...ys)));
+  const maxY=Math.min(gridSize-1,Math.ceil(Math.max(...ys)));
+  for(let y=minY;y<=maxY;y++){
+    const scanY=y+0.5;
+    const xs=[];
+    for(let i=0,j=points.length-1;i<points.length;j=i++){
+      const [xi,yi]=points[i], [xj,yj]=points[j];
+      if((yi>scanY)!==(yj>scanY)){
+        xs.push(xi+(scanY-yi)*(xj-xi)/(yj-yi));
+      }
+    }
+    xs.sort((a,b)=>a-b);
+    for(let i=0;i<xs.length;i+=2){
+      const xStart=Math.max(0,Math.ceil(xs[i]));
+      const xEnd=Math.min(gridSize-1,Math.floor(xs[i+1]));
+      for(let x=xStart;x<=xEnd;x++) changed=paintPixel(x,y,color,a)||changed;
+    }
+  }
+  return changed;
+}
+
+function drawArcPixels(cx,cy,rx,ry,startDeg,endDeg,color=currentColor,a=currentAlpha,size=strokeSize){
+  let span=endDeg-startDeg;
+  if(span===0)return;
+  const dir=span>=0?1:-1;
+  const steps=Math.max(2,Math.ceil(Math.max(rx,ry)*Math.abs(span)/45));
+  let prev=null;
+  for(let i=0;i<=steps;i++){
+    const deg=startDeg+(Math.abs(span)*i/steps)*dir;
+    const t=deg*Math.PI/180;
+    const x=Math.round(cx+Math.cos(t)*rx);
+    const y=Math.round(cy+Math.sin(t)*ry);
+    if(!prev) paintStrokePixel(x,y,color,a,size);
+    else if(prev[0]!==x||prev[1]!==y) drawLinePixels(prev[0],prev[1],x,y,color,a,size);
+    prev=[x,y];
+  }
+}
+
+function drawCurvePixels(x0,y0,cx,cy,x1,y1,color=currentColor,a=currentAlpha,size=strokeSize){
+  const dist=Math.abs(x1-x0)+Math.abs(y1-y0)+Math.abs(cx-x0)+Math.abs(cy-y0);
+  const steps=Math.max(8,Math.ceil(dist/2));
+  let prev=null;
+  for(let i=0;i<=steps;i++){
+    const t=i/steps,mt=1-t;
+    const x=Math.round(mt*mt*x0+2*mt*t*cx+t*t*x1);
+    const y=Math.round(mt*mt*y0+2*mt*t*cy+t*t*y1);
+    if(!prev) paintStrokePixel(x,y,color,a,size);
+    else if(prev[0]!==x||prev[1]!==y) drawLinePixels(prev[0],prev[1],x,y,color,a,size);
+    prev=[x,y];
+  }
+}
+
+function drawGradientRect(x,y,w,h,from,to,dir='v'){
+  let changed=false;
+  for(let yy=0;yy<h;yy++){
+    for(let xx=0;xx<w;xx++){
+      const denom=dir==='h'?Math.max(1,w-1):Math.max(1,h-1);
+      const t=(dir==='h'?xx:yy)/denom;
+      changed=paintPixel(x+xx,y+yy,blendHex(from,to,t),currentAlpha)||changed;
+    }
+  }
+  return changed;
 }
 
 mc.addEventListener('mousedown',e=>{
@@ -748,6 +936,7 @@ function capturePayload(id){
     currentColor,
     currentAlpha,
     brushSize,
+    strokeSize,
     tool,
     frameCount:list.length,
     categories:categories.map(c=>c.name),
@@ -796,6 +985,52 @@ async function pushState(id){
   log('State saved: '+data.id,'ok');
 }
 
+async function fetchSavedState(id='current'){
+  const r=await fetch('/snapshot/state/'+encodeURIComponent(id||'current'));
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
+  return data.state;
+}
+
+function applyPixelMatrix(rows){
+  ctx.clearRect(0,0,gridSize,gridSize);
+  if(!Array.isArray(rows))throw new Error('Estado sin matriz de pixels');
+  rows.forEach((row,y)=>{
+    if(!Array.isArray(row))return;
+    row.forEach((color,x)=>{
+      if(color)paintPixel(x,y,color);
+    });
+  });
+  saveFrameData();
+}
+
+function applyLoadedState(state){
+  if(!state||typeof state!=='object')throw new Error('Estado inválido');
+  const size=parseIntValue(state.gridSize);
+  const validSizes=[16,32,48,64];
+  if(size&&validSizes.includes(size)){
+    document.getElementById('canvas-size').value=String(size);
+  }
+  if(state.mode==='pixelart'||state.mode==='sprite')setMode(state.mode);
+  resizeCanvas();
+  if(Array.isArray(state.categories)&&state.categories.length){
+    categories=state.categories.map(name=>({name:String(name),frames:[]}));
+    currentCat=Math.max(0,categories.findIndex(c=>c.name===state.currentCategory));
+    if(currentCat<0)currentCat=0;
+  }
+  if(state.bgColor)setBgColor(state.bgColor);
+  if(state.currentColor)setColor(state.currentColor);
+  if(Number.isFinite(parseIntValue(state.currentAlpha))){
+    currentAlpha=Math.max(0,Math.min(255,parseIntValue(state.currentAlpha)));
+    document.getElementById('inp-alpha').value=currentAlpha;
+  }
+  if(Number.isFinite(parseIntValue(state.brushSize)))brushSize=Math.max(1,Math.min(32,parseIntValue(state.brushSize)));
+  if(Number.isFinite(parseIntValue(state.strokeSize)))strokeSize=Math.max(1,Math.min(32,parseIntValue(state.strokeSize)));
+  applyPixelMatrix(state.pixels);
+  renderFrameList();
+  renderCats();
+}
+
 function log(msg,type='ok'){
   const d=document.getElementById('term-log');
   const p=document.createElement('p');
@@ -807,7 +1042,7 @@ function log(msg,type='ok'){
 
 const COMMANDS={
   help:()=>{
-    log('Commands: help, clear, color <hex>, alpha <0-255>, brush <1-32>, setpixel <x> <y> [color], dot <cx> <cy> [size] [color], block <cx> <cy> <w> <h> [color], rectxy <x> <y> <w> <h> [color], fillcircle <cx> <cy> <r> [color], ellipse <cx> <cy> <rx> <ry> [color], fillellipse <cx> <cy> <rx> <ry> [color], polyline <x1> <y1> <x2> <y2> ... [color], getpixel, fill, drawline, drawrect, fillrect, circle, frames, modes, export, snapshot, statepush','info');
+    log('Commands: help, clear, color <hex>, alpha <0-255>, brush <1-32>, stroke <1-32>, setpixel, dot, block, rectxy, fillcircle, ellipse, fillellipse, polyline, polygon, fillpoly, arc, curve, gradient, copy, paste, translate, mirrorx, mirrory, rotate90, loadstate, getpixel, fill, drawline, drawrect, fillrect, circle, frames, modes, export, snapshot, statepush','info');
   },
   clear:()=>clearCanvas(),
   color:([hex])=>{if(!hex){log('Usage: color <hex>','err');return;}setColor(hex);log('Color: '+hex,'ok');},
@@ -817,6 +1052,12 @@ const COMMANDS={
     if(n===null){log('Usage: brush <1-32>','err');return;}
     brushSize=n;
     log('Brush: '+brushSize+'x'+brushSize,'ok');
+  },
+  stroke:([s])=>{
+    const n=validSize(s);
+    if(n===null){log('Usage: stroke <1-32>','err');return;}
+    strokeSize=n;
+    log('Stroke: '+strokeSize,'ok');
   },
   setpixel:([x,y,c])=>{
     x=parseInt(x);y=parseInt(y);
@@ -954,13 +1195,9 @@ const COMMANDS={
     [cx,cy,r]=[cx,cy,r].map(Number);
     if([cx,cy,r].some(isNaN)){log('Usage: circle <cx> <cy> <radius> [color]','err');return;}
     if(c)setColor(c);
-    let x=r,y=0,err=0;
-    while(x>=y){
-      [[cx+x,cy+y],[cx+y,cy+x],[cx-y,cy+x],[cx-x,cy+y],[cx-x,cy-y],[cx-y,cy-x],[cx+y,cy-x],[cx+x,cy-y]].forEach(([px,py])=>paintPixel(px,py));
-      if(err<=0){y++;err+=2*y+1;}else{x--;err-=2*x+1;}
-    }
+    drawCirclePixels(cx,cy,r);
     saveFrameData();
-    log('Circle ('+cx+','+cy+') r:'+r,'ok');
+    log('Circle ('+cx+','+cy+') r:'+r+' stroke '+strokeSize,'ok');
   },
   fillcircle:(args)=>{
     const parsed=splitTrailingColor(args);
@@ -990,18 +1227,105 @@ const COMMANDS={
     log('Fillellipse ('+values[0]+','+values[1]+') rx:'+values[2]+' ry:'+values[3],'ok');
   },
   polyline:(args)=>{
-    const parsed=splitTrailingColor(args);
-    const values=parsed.values.map(parseIntValue);
-    if(values.length<4||values.length%2!==0||values.some(v=>v===null)){log('Usage: polyline <x1> <y1> <x2> <y2> ... [color]','err');return;}
+    const parsed=parsePointArgs(args,2);
+    if(!parsed){log('Usage: polyline <x1> <y1> <x2> <y2> ... [color]','err');return;}
     if(parsed.color)setColor(parsed.color);
-    const points=[];
-    for(let i=0;i<values.length;i+=2) points.push([values[i],values[i+1]]);
-    drawPolylinePixels(points);
+    drawPolylinePixels(parsed.points);
     saveFrameData();
-    log('Polyline '+points.length+' points','ok');
+    log('Polyline '+parsed.points.length+' points stroke '+strokeSize,'ok');
+  },
+  polygon:(args)=>{
+    const parsed=parsePointArgs(args,3);
+    if(!parsed){log('Usage: polygon <x1> <y1> <x2> <y2> <x3> <y3> ... [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    drawPolygonPixels(parsed.points);
+    saveFrameData();
+    log('Polygon '+parsed.points.length+' points stroke '+strokeSize,'ok');
+  },
+  fillpoly:(args)=>{
+    const parsed=parsePointArgs(args,3);
+    if(!parsed){log('Usage: fillpoly <x1> <y1> <x2> <y2> <x3> <y3> ... [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    fillPolygonPixels(parsed.points);
+    saveFrameData();
+    log('Fillpoly '+parsed.points.length+' points','ok');
+  },
+  arc:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parseNumberList(parsed.values);
+    if(values.length!==6||values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: arc <cx> <cy> <rx> <ry> <startDeg> <endDeg> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    drawArcPixels(values[0],values[1],values[2],values[3],values[4],values[5]);
+    saveFrameData();
+    log('Arc ('+values[0]+','+values[1]+') '+values[4]+' -> '+values[5]+' stroke '+strokeSize,'ok');
+  },
+  curve:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parseNumberList(parsed.values);
+    if(values.length!==6||values.some(v=>v===null)){log('Usage: curve <x0> <y0> <cx> <cy> <x1> <y1> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    drawCurvePixels(values[0],values[1],values[2],values[3],values[4],values[5]);
+    saveFrameData();
+    log('Curve ('+values[0]+','+values[1]+') -> ('+values[4]+','+values[5]+') stroke '+strokeSize,'ok');
+  },
+  gradient:(args)=>{
+    if(args.length<6||args.length>7){log('Usage: gradient <x> <y> <w> <h> <#from> <#to> [h|v]','err');return;}
+    const values=parseNumberList(args.slice(0,4));
+    const from=args[4],to=args[5],dir=(args[6]||'v').toLowerCase();
+    if(values.some(v=>v===null)||values[2]<1||values[3]<1||!from.startsWith('#')||!to.startsWith('#')||(dir!=='h'&&dir!=='v')){log('Usage: gradient <x> <y> <w> <h> <#from> <#to> [h|v]','err');return;}
+    drawGradientRect(values[0],values[1],values[2],values[3],from,to,dir);
+    saveFrameData();
+    log('Gradient ('+values[0]+','+values[1]+') '+values[2]+'x'+values[3]+' '+dir,'ok');
+  },
+  copy:([x,y,w,h])=>{
+    const values=parseNumberList([x,y,w,h]);
+    if(values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: copy <x> <y> <w> <h>','err');return;}
+    clipboardPixels=copySelection(values[0],values[1],values[2],values[3]);
+    if(!clipboardPixels){log('Selection empty','err');return;}
+    log('Copied '+clipboardPixels.width+'x'+clipboardPixels.height,'ok');
+  },
+  paste:([x,y])=>{
+    const values=parseNumberList([x,y]);
+    if(values.some(v=>v===null)){log('Usage: paste <x> <y>','err');return;}
+    if(!clipboardPixels){log('Clipboard empty','err');return;}
+    pasteSelection(values[0],values[1],clipboardPixels);
+    saveFrameData();
+    log('Pasted '+clipboardPixels.width+'x'+clipboardPixels.height+' at ('+values[0]+','+values[1]+')','ok');
+  },
+  translate:([x,y,w,h,dx,dy])=>{
+    const values=parseNumberList([x,y,w,h,dx,dy]);
+    if(values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: translate <x> <y> <w> <h> <dx> <dy>','err');return;}
+    const clip=copySelection(values[0],values[1],values[2],values[3]);
+    if(!clip){log('Selection empty','err');return;}
+    clearSelection(values[0],values[1],values[2],values[3]);
+    pasteSelection(values[0]+values[4],values[1]+values[5],clip);
+    saveFrameData();
+    log('Translated '+clip.width+'x'+clip.height+' by ('+values[4]+','+values[5]+')','ok');
+  },
+  mirrorx:([x,y,w,h])=>{
+    const values=parseNumberList([x,y,w,h]);
+    if(values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: mirrorx <x> <y> <w> <h>','err');return;}
+    if(!mirrorSelection(values[0],values[1],values[2],values[3],'x')){log('Selection empty','err');return;}
+    saveFrameData();
+    log('Mirror X '+values[2]+'x'+values[3],'ok');
+  },
+  mirrory:([x,y,w,h])=>{
+    const values=parseNumberList([x,y,w,h]);
+    if(values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: mirrory <x> <y> <w> <h>','err');return;}
+    if(!mirrorSelection(values[0],values[1],values[2],values[3],'y')){log('Selection empty','err');return;}
+    saveFrameData();
+    log('Mirror Y '+values[2]+'x'+values[3],'ok');
+  },
+  rotate90:([x,y,w,h,dir='cw'])=>{
+    const values=parseNumberList([x,y,w,h]);
+    dir=String(dir||'cw').toLowerCase();
+    if(values.some(v=>v===null)||values[2]<1||values[3]<1||(dir!=='cw'&&dir!=='ccw')){log('Usage: rotate90 <x> <y> <w> <h> [cw|ccw]','err');return;}
+    if(!rotateSelection90(values[0],values[1],values[2],values[3],dir)){log('Selection empty','err');return;}
+    saveFrameData();
+    log('Rotate90 '+dir+' '+values[2]+'x'+values[3],'ok');
   },
   getstate:()=>{
-    const state={mode,gridSize,currentColor,currentAlpha,brushSize,bgColor,currentFrame,tool,frameCount:mode==='pixelart'?frames.length:categories[currentCat]?.frames.length,categories:categories.map(c=>c.name)};
+    const state={mode,gridSize,currentColor,currentAlpha,brushSize,strokeSize,bgColor,currentFrame,tool,frameCount:mode==='pixelart'?frames.length:categories[currentCat]?.frames.length,categories:categories.map(c=>c.name)};
     log(JSON.stringify(state),'info');
   },
   setpixels:(args)=>{
@@ -1022,6 +1346,11 @@ const COMMANDS={
   statepush:async([id])=>{
     const capture=captureId(id);
     await pushState(capture);
+  },
+  loadstate:async([id])=>{
+    const state=await fetchSavedState(id||'current');
+    applyLoadedState(state);
+    log('State loaded: '+(id||'current'),'ok');
   }
 };
 

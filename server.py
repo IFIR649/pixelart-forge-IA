@@ -40,6 +40,17 @@ def snapshot_path(filename):
     return os.path.abspath(os.path.join(SNAPSHOT_DIR, filename))
 
 
+def read_capture_state(raw_id="current"):
+    capture_id = "current" if not raw_id or raw_id == "current" else safe_capture_id(raw_id)
+    json_file = snapshot_path(f"{capture_id}.json")
+    if capture_id == "current":
+        json_file = snapshot_path("current.json")
+    if not os.path.exists(json_file):
+        return capture_id, json_file, None
+    with open(json_file, "r", encoding="utf-8") as f:
+        return capture_id, json_file, json.load(f)
+
+
 def strip_data_url(data_url):
     prefix = "data:image/png;base64,"
     if not isinstance(data_url, str) or not data_url.startswith(prefix):
@@ -169,6 +180,20 @@ class PixelForgeHandler(http.server.BaseHTTPRequestHandler):
                 }
             self._json_response(200, {"ok": True, "latest": data})
 
+        # Estado guardado para loadstate desde la app
+        elif path == "/snapshot/state/current" or path.startswith("/snapshot/state/"):
+            raw_id = path.rsplit("/", 1)[-1]
+            capture_id, json_file, state = read_capture_state(raw_id)
+            if state is None:
+                self._json_response(404, {"ok": False, "error": f"No existe estado: {capture_id}"})
+                return
+            self._json_response(200, {
+                "ok": True,
+                "id": capture_id,
+                "jsonPath": os.path.abspath(json_file),
+                "state": state,
+            })
+
         else:
             self.send_error(404)
 
@@ -283,6 +308,7 @@ def main():
     print("    POST /snapshot — guarda PNG + estado desde el navegador")
     print("    POST /state    — guarda estado/píxeles desde el navegador")
     print("    GET  /snapshot/latest — última captura guardada")
+    print("    GET  /snapshot/state/<id|current> — estado guardado para loadstate")
     print("    GET  /poll     — la app consume comandos (interno)")
     print("    GET  /status   — health check")
     print("  Ctrl+C para detener\n")
