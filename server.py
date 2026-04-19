@@ -82,6 +82,12 @@ def save_capture_png(capture_id, png_bytes):
     return png_file, current_png
 
 
+def clear_current_png():
+    current_png = snapshot_path("current.png")
+    if os.path.exists(current_png):
+        os.remove(current_png)
+
+
 def set_latest_capture(capture_id, metadata, png_file=None, json_file=None):
     global latest_snapshot
     latest_snapshot = {
@@ -239,6 +245,7 @@ class PixelForgeHandler(http.server.BaseHTTPRequestHandler):
                 capture_id = safe_capture_id(data.get("id"))
                 metadata = capture_metadata(data, capture_id)
                 json_file, current_json = save_capture_json(capture_id, metadata)
+                clear_current_png()
                 latest = set_latest_capture(capture_id, metadata, None, json_file)
                 print(f"  STATE: {capture_id}")
                 self._json_response(200, {

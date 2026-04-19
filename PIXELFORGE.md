@@ -130,6 +130,7 @@ Devuelve el último `id`, rutas absolutas y metadatos de la captura más recient
 
 | Comando | Argumentos | Descripción |
 |---------|-----------|-------------|
+| `brush` | `<1–32>` | Define tamaño de brocha cuadrada centrada para `setpixel`, lápiz y borrador |
 | `setpixel` | `<x> <y> [#hex]` | Pinta un píxel |
 | `setpixels` | `<x> <y> <#hex> ...` | Pinta múltiples píxeles (batch inline) |
 | `getpixel` | `<x> <y>` | Consulta el color de un píxel |
@@ -138,6 +139,13 @@ Devuelve el último `id`, rutas absolutas y metadatos de la captura más recient
 | `drawrect` | `<x0> <y0> <x1> <y1> [#hex]` | Dibuja un rectángulo (solo borde) |
 | `fillrect` | `<x0> <y0> <x1> <y1> [#hex]` | Dibuja un rectángulo relleno |
 | `circle` | `<cx> <cy> <radio> [#hex]` | Dibuja un círculo (solo borde) |
+| `dot` | `<cx> <cy> [size] [#hex]` | Pinta un bloque cuadrado centrado; usa `brush` si no se pasa `size` |
+| `block` | `<cx> <cy> <w> <h> [#hex]` | Pinta un rectángulo relleno centrado |
+| `rectxy` | `<x> <y> <w> <h> [#hex]` | Pinta un rectángulo relleno desde esquina superior izquierda |
+| `fillcircle` | `<cx> <cy> <radio> [#hex]` | Dibuja un círculo relleno |
+| `ellipse` | `<cx> <cy> <rx> <ry> [#hex]` | Dibuja una elipse de borde |
+| `fillellipse` | `<cx> <cy> <rx> <ry> [#hex]` | Dibuja una elipse rellena |
+| `polyline` | `<x1> <y1> <x2> <y2> ... [#hex]` | Dibuja líneas conectadas |
 
 > El argumento `[#hex]` es opcional. Si se omite, se usa el color activo.
 
@@ -171,6 +179,14 @@ PF-SetPixel  x y [color]           # Pinta un píxel
 PF-DrawLine  x0 y0 x1 y1 [color]   # Línea
 PF-FillRect  x0 y0 x1 y1 [color]   # Rectángulo relleno
 PF-Circle    cx cy radio [color]    # Círculo
+PF-Brush     size                  # Brocha cuadrada centrada
+PF-Dot       cx cy [size|color] [color]
+PF-Block     cx cy w h [color]      # Rectángulo centrado
+PF-RectXY    x y w h [color]        # Rectángulo desde esquina superior izquierda
+PF-FillCircle cx cy radio [color]   # Círculo relleno
+PF-Ellipse   cx cy rx ry [color]    # Elipse de borde
+PF-FillEllipse cx cy rx ry [color]  # Elipse rellena
+PF-Polyline  x1 y1 x2 y2 ... [color]
 
 PF-Clear                           # Limpiar canvas
 PF-AddFrame                        # Nuevo frame
@@ -232,6 +248,16 @@ PF-Batch @(
 
 # 4. Exportar
 PF-Export
+```
+
+### Formas vectoriales rasterizadas
+
+```powershell
+PF-Batch @(
+    "dot 20 20 10 #2bb673",
+    "fillellipse 24 30 14 6 #1f8a5b",
+    "polyline 10 20 4 32 8 38 18 40 #c084fc"
+)
 ```
 
 ### Revisar visualmente el canvas
@@ -320,11 +346,13 @@ PF-Batch @(
 ```
 
 **Jerarquía de eficiencia:**
-1. `fillrect` — mejor para áreas grandes
-2. `drawline` / `circle` — mejor para formas geométricas
-3. `fill` — mejor para rellenar áreas irregulares ya dibujadas
-4. `setpixels x y c x y c ...` — batch inline para puntos sueltos
-5. `setpixel` — solo para píxeles individuales específicos
+1. `block`, `rectxy`, `fillcircle`, `fillellipse` — mejor para masas grandes
+2. `polyline`, `drawline`, `ellipse`, `circle` — mejor para siluetas y contornos
+3. `fillrect` — mejor para áreas rectangulares por coordenadas absolutas
+4. `fill` — mejor para rellenar áreas irregulares ya dibujadas
+5. `dot` / `brush` — mejor para detalles de tamaño fijo
+6. `setpixels x y c x y c ...` — batch inline para puntos sueltos
+7. `setpixel` — solo para píxeles individuales específicos
 
 ---
 
@@ -336,6 +364,7 @@ PF-Batch @(
   "gridSize": 32,
   "currentColor": "#e94560",
   "currentAlpha": 255,
+  "brushSize": 1,
   "bgColor": "#1a1a2e",
   "currentFrame": 1,
   "tool": "pencil",
@@ -355,6 +384,7 @@ PF-Batch @(
 - El canvas se actualiza en **tiempo real** en el navegador
 - El frame activo se guarda automáticamente al dibujar
 - `setpixel` y `drawline` usan el **color activo** si no se especifica color
+- `brush` afecta `setpixel`, lápiz y borrador; las formas vectoriales mantienen su grosor propio
 - Coordenadas fuera de rango se ignoran silenciosamente
 - Al cambiar `setsize` se **borran todos los frames** — hacerlo primero
 

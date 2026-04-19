@@ -67,6 +67,70 @@ function PF-Circle {
     PF-Cmd "circle $cx $cy $r"
 }
 
+function PF-Brush {
+    param([int]$size)
+    PF-Cmd "brush $size"
+}
+
+function PF-Dot {
+    param([int]$cx,[int]$cy,[object]$sizeOrColor=$null,[string]$color="")
+    $cmd = "dot $cx $cy"
+    if ($null -ne $sizeOrColor -and "$sizeOrColor" -ne "") {
+        $value = [string]$sizeOrColor
+        if ($value.StartsWith("#") -or $value -eq "transparent") {
+            $color = $value
+        } else {
+            $cmd += " $value"
+        }
+    }
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-Block {
+    param([int]$cx,[int]$cy,[int]$w,[int]$h,[string]$color="")
+    $cmd = "block $cx $cy $w $h"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-RectXY {
+    param([int]$x,[int]$y,[int]$w,[int]$h,[string]$color="")
+    $cmd = "rectxy $x $y $w $h"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-FillCircle {
+    param([int]$cx,[int]$cy,[int]$r,[string]$color="")
+    $cmd = "fillcircle $cx $cy $r"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-Ellipse {
+    param([int]$cx,[int]$cy,[int]$rx,[int]$ry,[string]$color="")
+    $cmd = "ellipse $cx $cy $rx $ry"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-FillEllipse {
+    param([int]$cx,[int]$cy,[int]$rx,[int]$ry,[string]$color="")
+    $cmd = "fillellipse $cx $cy $rx $ry"
+    if ($color) { $cmd += " $color" }
+    PF-Cmd $cmd
+}
+
+function PF-Polyline {
+    param([Parameter(ValueFromRemainingArguments=$true)][object[]]$Args)
+    if (-not $Args -or $Args.Count -lt 4) {
+        Write-Host "  Usage: PF-Polyline x1 y1 x2 y2 [... color]" -ForegroundColor Yellow
+        return
+    }
+    PF-Cmd ("polyline " + (($Args | ForEach-Object { [string]$_ }) -join " "))
+}
+
 function PF-Clear    { PF-Cmd "clear" }
 function PF-AddFrame { PF-Cmd "addframe" }
 function PF-NextFrame{ PF-Cmd "nextframe" }

@@ -161,7 +161,7 @@ const PALETTE = ['#000000','#ffffff','#ff0000','#00ff00','#0000ff','#ffff00','#f
 '#16213e','#0f3460','#53a8d2','#2d6a4f','#1b4332','#d4a017','#8b0000','#006400',
 '#1a1a2e','#ffd700','#ff69b4','#7b2d8b','#e07b39','#3d5a80','#98c1d9','#ee6c4d'];
 
-let mode='pixelart', tool='pencil', currentColor='#e94560', currentAlpha=255;
+let mode='pixelart', tool='pencil', currentColor='#e94560', currentAlpha=255, brushSize=1;
 let gridSize=32, zoom=10, isDrawing=false, lastX=-1, lastY=-1;
 let bgColor='#000000', showGrid=true;
 let frames=[], currentFrame=0;
@@ -244,8 +244,8 @@ function hexToRgba(hex,a=255){
   return [n>>16&255,(n>>8)&255,n&255,a];
 }
 
-function drawPixel(x,y,color=currentColor,a=currentAlpha){
-  if(x<0||y<0||x>=gridSize||y>=gridSize)return;
+function paintPixel(x,y,color=currentColor,a=currentAlpha){
+  if(x<0||y<0||x>=gridSize||y>=gridSize)return false;
   if(color==='transparent'||a===0){
     ctx.clearRect(x,y,1,1);
   } else {
@@ -253,13 +253,53 @@ function drawPixel(x,y,color=currentColor,a=currentAlpha){
     ctx.fillStyle=`rgba(${r},${g},${b},${a/255})`;
     ctx.fillRect(x,y,1,1);
   }
-  saveFrameData();
+  return true;
+}
+
+function parseIntValue(v){
+  const n=parseInt(v,10);
+  return Number.isFinite(n)?n:null;
+}
+
+function isColorArg(v){
+  return typeof v==='string'&&(v.toLowerCase()==='transparent'||v.startsWith('#'));
+}
+
+function splitTrailingColor(args){
+  const values=args.slice();
+  let color=null;
+  if(values.length&&isColorArg(values[values.length-1])) color=values.pop();
+  return {values,color};
+}
+
+function validSize(v,min=1,max=32){
+  const n=parseIntValue(v);
+  if(n===null||n<min||n>max)return null;
+  return n;
+}
+
+function paintBlockXY(x,y,w,h,color=currentColor,a=currentAlpha){
+  let changed=false;
+  for(let yy=0;yy<h;yy++){
+    for(let xx=0;xx<w;xx++){
+      changed=paintPixel(x+xx,y+yy,color,a)||changed;
+    }
+  }
+  return changed;
+}
+
+function paintCenteredBlock(cx,cy,w,h,color=currentColor,a=currentAlpha){
+  const x=Math.floor(cx-(w-1)/2);
+  const y=Math.floor(cy-(h-1)/2);
+  return paintBlockXY(x,y,w,h,color,a);
+}
+
+function drawPixel(x,y,color=currentColor,a=currentAlpha){
+  if(paintCenteredBlock(x,y,brushSize,brushSize,color,a)) saveFrameData();
 }
 
 function erasePixel(x,y){
-  if(x<0||y<0||x>=gridSize||y>=gridSize)return;
-  ctx.clearRect(x,y,1,1);
-  saveFrameData();
+  if(paintCenteredBlock(x,y,brushSize,brushSize,'transparent',0)) saveFrameData();
 }
 
 function fill(x,y,targetColor,fillColor){
@@ -287,11 +327,11 @@ function fill(x,y,targetColor,fillColor){
   saveFrameData();
 }
 
-function drawLinePixels(x0,y0,x1,y1){
+function drawLinePixels(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
   let dx=Math.abs(x1-x0),dy=Math.abs(y1-y0);
   let sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx-dy;
   while(true){
-    drawPixel(x0,y0);
+    paintPixel(x0,y0,color,a);
     if(x0===x1&&y0===y1)break;
     let e2=2*err;
     if(e2>-dy){err-=dy;x0+=sx;}
@@ -299,17 +339,70 @@ function drawLinePixels(x0,y0,x1,y1){
   }
 }
 
-function drawRect(x0,y0,x1,y1){
+function drawRect(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
   const minx=Math.min(x0,x1),maxx=Math.max(x0,x1);
   const miny=Math.min(y0,y1),maxy=Math.max(y0,y1);
-  for(let x=minx;x<=maxx;x++){drawPixel(x,miny);drawPixel(x,maxy);}
-  for(let y=miny;y<=maxy;y++){drawPixel(minx,y);drawPixel(maxx,y);}
+  for(let x=minx;x<=maxx;x++){paintPixel(x,miny,color,a);paintPixel(x,maxy,color,a);}
+  for(let y=miny;y<=maxy;y++){paintPixel(minx,y,color,a);paintPixel(maxx,y,color,a);}
 }
 
-gc.addEventListener('mousedown',e=>{
+function fillRectInclusive(x0,y0,x1,y1,color=currentColor,a=currentAlpha){
+  let changed=false;
+  const minx=Math.min(x0,x1),maxx=Math.max(x0,x1);
+  const miny=Math.min(y0,y1),maxy=Math.max(y0,y1);
+  for(let y=miny;y<=maxy;y++){
+    for(let x=minx;x<=maxx;x++){
+      changed=paintPixel(x,y,color,a)||changed;
+    }
+  }
+  return changed;
+}
+
+function drawFilledCircle(cx,cy,r,color=currentColor,a=currentAlpha){
+  let changed=false;
+  for(let y=-r;y<=r;y++){
+    for(let x=-r;x<=r;x++){
+      if(x*x+y*y<=r*r) changed=paintPixel(cx+x,cy+y,color,a)||changed;
+    }
+  }
+  return changed;
+}
+
+function drawEllipsePixels(cx,cy,rx,ry,color=currentColor,a=currentAlpha){
+  const steps=Math.max(12,Math.ceil(Math.max(rx,ry)*8));
+  let prev=null;
+  for(let i=0;i<=steps;i++){
+    const t=(Math.PI*2*i)/steps;
+    const x=Math.round(cx+Math.cos(t)*rx);
+    const y=Math.round(cy+Math.sin(t)*ry);
+    if(!prev) paintPixel(x,y,color,a);
+    else if(prev[0]!==x||prev[1]!==y) drawLinePixels(prev[0],prev[1],x,y,color,a);
+    prev=[x,y];
+  }
+}
+
+function drawFilledEllipse(cx,cy,rx,ry,color=currentColor,a=currentAlpha){
+  let changed=false;
+  const rx2=rx*rx, ry2=ry*ry, limit=rx2*ry2;
+  for(let y=-ry;y<=ry;y++){
+    for(let x=-rx;x<=rx;x++){
+      if(x*x*ry2+y*y*rx2<=limit) changed=paintPixel(cx+x,cy+y,color,a)||changed;
+    }
+  }
+  return changed;
+}
+
+function drawPolylinePixels(points){
+  for(let i=0;i<points.length-1;i++){
+    drawLinePixels(points[i][0],points[i][1],points[i+1][0],points[i+1][1]);
+  }
+}
+
+mc.addEventListener('mousedown',e=>{
   isDrawing=true;
   const [x,y]=getPos(e);
   startX=x; startY=y;
+  if(tool==='line'||tool==='rect') previewPixels=ctx.getImageData(0,0,gridSize,gridSize);
   if(tool==='pencil') drawPixel(x,y);
   else if(tool==='eraser') erasePixel(x,y);
   else if(tool==='fill'){
@@ -328,22 +421,21 @@ gc.addEventListener('mousedown',e=>{
   lastX=x; lastY=y;
 });
 
-gc.addEventListener('mousemove',e=>{
+mc.addEventListener('mousemove',e=>{
   const [x,y]=getPos(e);
   document.getElementById('coords-info').textContent='x:'+x+' y:'+y;
   if(!isDrawing)return;
   if(tool==='pencil'){if(x!==lastX||y!==lastY)drawPixel(x,y);}
   else if(tool==='eraser'){if(x!==lastX||y!==lastY)erasePixel(x,y);}
   else if(tool==='line'||tool==='rect'){
-    if(previewPixels){ctx.putImageData(previewPixels,0,0);}
-    else previewPixels=ctx.getImageData(0,0,gridSize,gridSize);
+    ctx.putImageData(previewPixels,0,0);
     if(tool==='line') drawLinePixels(startX,startY,x,y);
     else drawRect(startX,startY,x,y);
   }
   lastX=x; lastY=y;
 });
 
-gc.addEventListener('mouseup',e=>{
+mc.addEventListener('mouseup',e=>{
   if(!isDrawing)return;
   isDrawing=false;
   const [x,y]=getPos(e);
@@ -356,7 +448,13 @@ gc.addEventListener('mouseup',e=>{
   }
 });
 
-gc.addEventListener('mouseleave',()=>{isDrawing=false;});
+mc.addEventListener('mouseleave',()=>{
+  if(previewPixels){
+    ctx.putImageData(previewPixels,0,0);
+    previewPixels=null;
+  }
+  isDrawing=false;
+});
 
 function saveFrameData(){
   const data=ctx.getImageData(0,0,gridSize,gridSize);
@@ -528,7 +626,9 @@ function renderCats(){
     sec.className='cat-section';
     const lbl=document.createElement('div');
     lbl.className='cat-label';
-    lbl.innerHTML=`<span>${cat.name}</span>`;
+    const name=document.createElement('span');
+    name.textContent=cat.name;
+    lbl.appendChild(name);
     const addBtn=document.createElement('button');
     addBtn.textContent='+frame';
     addBtn.onclick=()=>{currentCat=ci;addFrame();};
@@ -647,6 +747,7 @@ function capturePayload(id){
     bgColor,
     currentColor,
     currentAlpha,
+    brushSize,
     tool,
     frameCount:list.length,
     categories:categories.map(c=>c.name),
@@ -706,17 +807,53 @@ function log(msg,type='ok'){
 
 const COMMANDS={
   help:()=>{
-    log('Commands: help, clear, color <hex>, setpixel <x> <y> [color], getpixel <x> <y>, fill <x> <y> [color], drawline <x0> <y0> <x1> <y1>, drawrect <x0> <y0> <x1> <y1>, addframe, nextframe, prevframe, listframes, setframe <n>, setmode <pixelart|sprite>, setsize <16|32|48|64>, addcat <name>, setcat <name>, setbg <hex|transparent>, zoom <n>, export, snapshot [id] [scale], statepush [id], alpha <0-255>','info');
+    log('Commands: help, clear, color <hex>, alpha <0-255>, brush <1-32>, setpixel <x> <y> [color], dot <cx> <cy> [size] [color], block <cx> <cy> <w> <h> [color], rectxy <x> <y> <w> <h> [color], fillcircle <cx> <cy> <r> [color], ellipse <cx> <cy> <rx> <ry> [color], fillellipse <cx> <cy> <rx> <ry> [color], polyline <x1> <y1> <x2> <y2> ... [color], getpixel, fill, drawline, drawrect, fillrect, circle, frames, modes, export, snapshot, statepush','info');
   },
   clear:()=>clearCanvas(),
   color:([hex])=>{if(!hex){log('Usage: color <hex>','err');return;}setColor(hex);log('Color: '+hex,'ok');},
   alpha:([v])=>{const n=parseInt(v);if(isNaN(n)||n<0||n>255){log('Usage: alpha <0-255>','err');return;}document.getElementById('inp-alpha').value=n;updateAlpha(n);log('Alpha: '+n,'ok');},
+  brush:([s])=>{
+    const n=validSize(s);
+    if(n===null){log('Usage: brush <1-32>','err');return;}
+    brushSize=n;
+    log('Brush: '+brushSize+'x'+brushSize,'ok');
+  },
   setpixel:([x,y,c])=>{
     x=parseInt(x);y=parseInt(y);
     if(isNaN(x)||isNaN(y)){log('Usage: setpixel <x> <y> [color]','err');return;}
     if(c)setColor(c);
     drawPixel(x,y);
-    log('Pixel set ('+x+','+y+') '+currentColor,'ok');
+    log('Pixel set ('+x+','+y+') '+currentColor+' brush '+brushSize,'ok');
+  },
+  dot:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values;
+    if(values.length<2||values.length>3){log('Usage: dot <cx> <cy> [size] [color]','err');return;}
+    const cx=parseIntValue(values[0]),cy=parseIntValue(values[1]);
+    const size=values.length===3?validSize(values[2]):brushSize;
+    if(cx===null||cy===null||size===null){log('Usage: dot <cx> <cy> [size 1-32] [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    paintCenteredBlock(cx,cy,size,size);
+    saveFrameData();
+    log('Dot ('+cx+','+cy+') size '+size,'ok');
+  },
+  block:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values.map(parseIntValue);
+    if(values.length!==4||values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: block <cx> <cy> <w> <h> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    paintCenteredBlock(values[0],values[1],values[2],values[3]);
+    saveFrameData();
+    log('Block center ('+values[0]+','+values[1]+') '+values[2]+'x'+values[3],'ok');
+  },
+  rectxy:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values.map(parseIntValue);
+    if(values.length!==4||values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: rectxy <x> <y> <w> <h> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    paintBlockXY(values[0],values[1],values[2],values[3]);
+    saveFrameData();
+    log('Rectxy ('+values[0]+','+values[1]+') '+values[2]+'x'+values[3],'ok');
   },
   getpixel:([x,y])=>{
     x=parseInt(x);y=parseInt(y);
@@ -809,11 +946,9 @@ const COMMANDS={
     [x0,y0,x1,y1]=[x0,y0,x1,y1].map(Number);
     if([x0,y0,x1,y1].some(isNaN)){log('Usage: fillrect <x0> <y0> <x1> <y1> [color]','err');return;}
     if(c)setColor(c);
-    const minx=Math.min(x0,x1),maxx=Math.max(x0,x1);
-    const miny=Math.min(y0,y1),maxy=Math.max(y0,y1);
-    for(let y=miny;y<=maxy;y++)for(let x=minx;x<=maxx;x++)drawPixel(x,y);
+    fillRectInclusive(x0,y0,x1,y1);
     saveFrameData();
-    log('Fillrect ('+minx+','+miny+') -> ('+maxx+','+maxy+')','ok');
+    log('Fillrect ('+Math.min(x0,x1)+','+Math.min(y0,y1)+') -> ('+Math.max(x0,x1)+','+Math.max(y0,y1)+')','ok');
   },
   circle:([cx,cy,r,c])=>{
     [cx,cy,r]=[cx,cy,r].map(Number);
@@ -821,22 +956,62 @@ const COMMANDS={
     if(c)setColor(c);
     let x=r,y=0,err=0;
     while(x>=y){
-      [[cx+x,cy+y],[cx+y,cy+x],[cx-y,cy+x],[cx-x,cy+y],[cx-x,cy-y],[cx-y,cy-x],[cx+y,cy-x],[cx+x,cy-y]].forEach(([px,py])=>drawPixel(px,py));
+      [[cx+x,cy+y],[cx+y,cy+x],[cx-y,cy+x],[cx-x,cy+y],[cx-x,cy-y],[cx-y,cy-x],[cx+y,cy-x],[cx+x,cy-y]].forEach(([px,py])=>paintPixel(px,py));
       if(err<=0){y++;err+=2*y+1;}else{x--;err-=2*x+1;}
     }
     saveFrameData();
     log('Circle ('+cx+','+cy+') r:'+r,'ok');
   },
+  fillcircle:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values.map(parseIntValue);
+    if(values.length!==3||values.some(v=>v===null)||values[2]<0){log('Usage: fillcircle <cx> <cy> <radius> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    drawFilledCircle(values[0],values[1],values[2]);
+    saveFrameData();
+    log('Fillcircle ('+values[0]+','+values[1]+') r:'+values[2],'ok');
+  },
+  ellipse:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values.map(parseIntValue);
+    if(values.length!==4||values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: ellipse <cx> <cy> <rx> <ry> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    drawEllipsePixels(values[0],values[1],values[2],values[3]);
+    saveFrameData();
+    log('Ellipse ('+values[0]+','+values[1]+') rx:'+values[2]+' ry:'+values[3],'ok');
+  },
+  fillellipse:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values.map(parseIntValue);
+    if(values.length!==4||values.some(v=>v===null)||values[2]<1||values[3]<1){log('Usage: fillellipse <cx> <cy> <rx> <ry> [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    drawFilledEllipse(values[0],values[1],values[2],values[3]);
+    saveFrameData();
+    log('Fillellipse ('+values[0]+','+values[1]+') rx:'+values[2]+' ry:'+values[3],'ok');
+  },
+  polyline:(args)=>{
+    const parsed=splitTrailingColor(args);
+    const values=parsed.values.map(parseIntValue);
+    if(values.length<4||values.length%2!==0||values.some(v=>v===null)){log('Usage: polyline <x1> <y1> <x2> <y2> ... [color]','err');return;}
+    if(parsed.color)setColor(parsed.color);
+    const points=[];
+    for(let i=0;i<values.length;i+=2) points.push([values[i],values[i+1]]);
+    drawPolylinePixels(points);
+    saveFrameData();
+    log('Polyline '+points.length+' points','ok');
+  },
   getstate:()=>{
-    const state={mode,gridSize,currentColor,currentAlpha,bgColor,currentFrame,tool,frameCount:mode==='pixelart'?frames.length:categories[currentCat]?.frames.length,categories:categories.map(c=>c.name)};
+    const state={mode,gridSize,currentColor,currentAlpha,brushSize,bgColor,currentFrame,tool,frameCount:mode==='pixelart'?frames.length:categories[currentCat]?.frames.length,categories:categories.map(c=>c.name)};
     log(JSON.stringify(state),'info');
   },
   setpixels:(args)=>{
+    let changed=false;
     for(let i=0;i<args.length-2;i+=3){
       const x=parseInt(args[i]),y=parseInt(args[i+1]),c=args[i+2];
       if(c)setColor(c);
-      drawPixel(x,y);
+      changed=paintPixel(x,y)||changed;
     }
+    if(changed)saveFrameData();
     log('Batch pixels done','ok');
   },
   snapshot:async([id,scale])=>{
