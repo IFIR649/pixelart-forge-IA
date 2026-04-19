@@ -119,7 +119,11 @@ Devuelve el JSON completo guardado, incluyendo `pixels`, para que la app pueda e
 | `setbg` | `<#hex\|transparent>` | Define el color de fondo |
 | `setmode` | `<pixelart\|sprite>` | Cambia el modo de la app |
 | `zoom` | `<4–24>` | Nivel de zoom visual |
-| `export` | — | Exporta el frame actual como PNG |
+| `export` | — | Alias legacy de `exportframe` |
+| `exportmax` | `<1–2400>` | Define el lado máximo de exportación |
+| `exportframe` | `[max]` | Exporta el frame actual como PNG |
+| `exportall` | `[categoria] [max]` | Exporta todos los frames de la categoría actual o indicada |
+| `spritesheet` | `[categoria] [cols] [max]` | Exporta una hoja PNG con todos los frames |
 | `getstate` | — | Devuelve JSON con el estado completo |
 | `snapshot` | `[id] [scale]` | Envía PNG escalado + estado al servidor |
 | `statepush` | `[id]` | Envía estado/píxeles al servidor sin PNG |
@@ -173,14 +177,30 @@ Devuelve el JSON completo guardado, incluyendo `pixels`, para que la app pueda e
 | `mirrory` | `<x> <y> <w> <h>` | Refleja una selección verticalmente |
 | `rotate90` | `<x> <y> <w> <h> [cw\|ccw]` | Rota una selección 90 grados |
 
+### Pixel Ops
+
+| Comando | Argumentos | Descripción |
+|---------|-----------|-------------|
+| `smoothpixels` | `[passes]` | Suaviza escalones duros usando mayoría de vecinos |
+| `despeckle` | `[minSize]` | Elimina islas pequeñas de píxeles |
+| `outline` | `<#hex>` | Agrega contorno de 4 vecinos sin pintar encima |
+| `loadpixels` | `[current\|id]` | Carga solo la matriz de píxeles en el frame actual |
+
+Las macros Python (`PF-PixelOp`, `PF-ZombieStep`) generan estados JSON nuevos y luego usan `loadpixels` para no borrar categorías ni frames existentes.
+
 ### Frames y animación
 
 | Comando | Argumentos | Descripción |
 |---------|-----------|-------------|
 | `addframe` | — | Agrega un nuevo frame vacío |
+| `cloneframe` | — | Duplica el frame actual |
+| `dupframe` | — | Duplica el frame actual |
+| `delframe` | `[n]` | Borra el frame indicado o el actual; siempre deja al menos un frame |
+| `moveframe` | `<from> <to>` | Mueve un frame usando índices base 1 |
 | `nextframe` | — | Va al frame siguiente |
 | `prevframe` | — | Va al frame anterior |
 | `setframe` | `<n>` | Va al frame número n (base 1) |
+| `setfps` | `<1–60>` | Cambia los FPS del preview de animación |
 | `listframes` | — | Muestra cuántos frames hay y cuál es el actual |
 
 ### Categorías de sprites (modo sprite)
@@ -224,6 +244,20 @@ PF-MirrorX   x y w h
 PF-MirrorY   x y w h
 PF-Rotate90  x y w h [cw|ccw]
 PF-LoadState [current|id]
+PF-ExportMax maxPx                  # Lado máximo de exportación, hasta 2400
+PF-ExportFrame [maxPx]              # Exporta el frame actual
+PF-ExportAll [category] [maxPx]     # Exporta todos los frames
+PF-Spritesheet [category|cols] [cols] [maxPx]
+PF-DupFrame                         # Duplica frame actual
+PF-DelFrame [index]                 # Borra frame actual o indicado
+PF-MoveFrame from to                # Reordena frames
+PF-SetFps fps                       # FPS del preview
+PF-CloneFrame                       # Alias explícito para duplicar frame
+PF-PixelOp op [args]                # Ejecuta pixelforge_ops.py sobre current.json
+PF-SmoothPixels [passes]            # Limpieza orgánica de bordes
+PF-Despeckle [minSize]              # Quita islas pequeñas
+PF-Outline [color]                  # Refuerza contorno
+PF-ZombieStep                       # Deriva un frame zombie desde el actual
 
 PF-Clear                           # Limpiar canvas
 PF-AddFrame                        # Nuevo frame
@@ -329,6 +363,43 @@ PF-Cmd "loadstate current"
 PF-Cmd "loadstate snapshot_20260418_181307_478"
 ```
 
+### Exportar animaciones
+
+```powershell
+# Export max conserva escalado entero pixelado y nunca supera 2400 px por lado.
+PF-ExportMax 2400
+PF-ExportFrame
+
+# En modo sprite exporta la categoría actual, o una categoría por nombre.
+PF-ExportAll "dog_walk"
+PF-Spritesheet "dog_walk" 4 2400
+
+# Timeline básico.
+PF-DupFrame
+PF-MoveFrame 4 2
+PF-DelFrame 3
+PF-SetFps 12
+```
+
+### Crear variaciones orgánicas desde un boceto
+
+```powershell
+# 1. Derivar un nuevo frame caminando desde el frame actual.
+PF-ZombieStep
+
+# 2. Limpiar bordes sin redibujar desde cero.
+PF-SmoothPixels 1
+PF-Despeckle 2
+PF-Outline "#000000"
+
+# 3. Operaciones sueltas del motor Python.
+PF-PixelOp lean -2 2
+PF-PixelOp smear 8 20 18 20 -2 1
+PF-PixelOp jitter 1 "#ff0088"
+```
+
+`PF-ZombieStep` crea un frame nuevo y conserva la paleta del boceto porque copia y desplaza píxeles existentes. `PF-SmoothPixels`, `PF-Despeckle` y `PF-Outline` operan sobre el frame actual.
+
 ### Revisar visualmente el canvas
 
 ```powershell
@@ -419,10 +490,11 @@ PF-Batch @(
 2. `polygon`, `polyline`, `arc`, `curve`, `drawline`, `ellipse`, `circle` — mejor para siluetas y contornos
 3. `copy`, `paste`, `translate`, `mirrorx`, `mirrory`, `rotate90` — mejor para repetir o variar formas
 4. `fillrect` — mejor para áreas rectangulares por coordenadas absolutas
-5. `fill` — mejor para rellenar áreas irregulares ya dibujadas
-6. `dot` / `brush` — mejor para detalles de tamaño fijo
-7. `setpixels x y c x y c ...` — batch inline para puntos sueltos
-8. `setpixel` — solo para píxeles individuales específicos
+5. `PF-ZombieStep`, `PF-PixelOp`, `smoothpixels`, `despeckle` — mejor para derivar variaciones desde un sprite existente
+6. `fill` — mejor para rellenar áreas irregulares ya dibujadas
+7. `dot` / `brush` — mejor para detalles de tamaño fijo
+8. `setpixels x y c x y c ...` — batch inline para puntos sueltos
+9. `setpixel` — solo para píxeles individuales específicos
 
 ---
 
@@ -436,6 +508,7 @@ PF-Batch @(
   "currentAlpha": 255,
   "brushSize": 1,
   "strokeSize": 1,
+  "exportMax": 2400,
   "bgColor": "#1a1a2e",
   "currentFrame": 1,
   "tool": "pencil",
@@ -458,6 +531,11 @@ PF-Batch @(
 - `brush` afecta `setpixel`, lápiz y borrador; las formas vectoriales mantienen su grosor propio
 - `stroke` afecta líneas, rectángulos de borde, círculos, elipses, polígonos, arcos y curvas
 - Las transformaciones usan selección explícita `x y w h`
+- `exportmax` define el lado máximo de salida; el escalado es entero para mantener bordes nítidos
+- `exportall` descarga varios PNG desde el navegador; si el navegador limita múltiples descargas, habilitarlas para `localhost`
+- `spritesheet` ajusta columnas cuando hace falta para mantenerse dentro del límite configurado
+- `loadpixels` carga solo píxeles en el frame activo; úsalo para estados generados por `pixelforge_ops.py`
+- Las macros Python escriben snapshots JSON nuevos; no sobrescriben PNG históricos
 - `loadstate` carga desde `snapshots/current.json` o `snapshots/<id>.json`
 - Coordenadas fuera de rango se ignoran silenciosamente
 - Al cambiar `setsize` se **borran todos los frames** — hacerlo primero

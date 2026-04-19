@@ -208,6 +208,127 @@ function PF-LoadState {
     PF-Cmd "loadstate $id"
 }
 
+function PF-ExportMax {
+    param([int]$Max)
+    PF-Cmd "exportmax $Max"
+}
+
+function PF-ExportFrame {
+    param([int]$Max = 0)
+    $cmd = "exportframe"
+    if ($Max -gt 0) { $cmd += " $Max" }
+    PF-Cmd $cmd
+}
+
+function PF-ExportAll {
+    param([string]$Category = "", [int]$Max = 0)
+    $cmd = "exportall"
+    if ($Category) { $cmd += " $Category" }
+    if ($Max -gt 0) { $cmd += " $Max" }
+    PF-Cmd $cmd
+}
+
+function PF-Spritesheet {
+    param([object]$CategoryOrCols = $null, [int]$Cols = 0, [int]$Max = 0)
+    $cmd = "spritesheet"
+    if ($null -ne $CategoryOrCols -and "$CategoryOrCols" -ne "") { $cmd += " $CategoryOrCols" }
+    if ($Cols -gt 0) { $cmd += " $Cols" }
+    if ($Max -gt 0) { $cmd += " $Max" }
+    PF-Cmd $cmd
+}
+
+function PF-DupFrame {
+    PF-Cmd "dupframe"
+}
+
+function PF-DelFrame {
+    param([int]$Index = 0)
+    if ($Index -gt 0) { PF-Cmd "delframe $Index" }
+    else { PF-Cmd "delframe" }
+}
+
+function PF-MoveFrame {
+    param([int]$From,[int]$To)
+    PF-Cmd "moveframe $From $To"
+}
+
+function PF-SetFps {
+    param([int]$Fps)
+    PF-Cmd "setfps $Fps"
+}
+
+function Invoke-PixelForgeOp {
+    param(
+        [string]$Op,
+        [string[]]$Arguments = @(),
+        [switch]$NewFrame,
+        [int]$TimeoutSec = 8
+    )
+    $state = PF-State -TimeoutSec $TimeoutSec
+    if (-not $state) { return $null }
+
+    $root = PF-Root
+    $script = Join-Path $root "pixelforge_ops.py"
+    if (-not (Test-Path -LiteralPath $script)) {
+        Write-Host "  ERR pixelop: no existe $script" -ForegroundColor Red
+        return $null
+    }
+
+    $cmdArgs = @($script, "--source", $state.JsonPath, "--op", $Op) + $Arguments
+    $raw = & python @cmdArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERR pixelop: $raw" -ForegroundColor Red
+        return $null
+    }
+
+    try {
+        $result = (($raw | Out-String).Trim() | ConvertFrom-Json)
+    } catch {
+        Write-Host "  ERR pixelop: salida inválida $raw" -ForegroundColor Red
+        return $null
+    }
+
+    if ($NewFrame) {
+        PF-Cmd "cloneframe" | Out-Null
+    }
+    PF-Cmd "loadpixels $($result.id)" | Out-Null
+    Write-Host "  PIXELOP: $Op -> $($result.JsonPath)" -ForegroundColor Cyan
+    return $result
+}
+
+function PF-PixelOp {
+    param(
+        [Parameter(Mandatory=$true)][string]$Op,
+        [Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments
+    )
+    Invoke-PixelForgeOp -Op $Op -Arguments $Arguments
+}
+
+function PF-CloneFrame {
+    PF-Cmd "cloneframe"
+}
+
+function PF-SmoothPixels {
+    param([int]$Passes = 1)
+    Invoke-PixelForgeOp -Op "smoothpixels" -Arguments @([string]$Passes)
+}
+
+function PF-Despeckle {
+    param([int]$MinSize = 2)
+    Invoke-PixelForgeOp -Op "despeckle" -Arguments @([string]$MinSize)
+}
+
+function PF-Outline {
+    param([string]$Color = "#000000")
+    Invoke-PixelForgeOp -Op "outline" -Arguments @($Color)
+}
+
+function PF-ZombieStep {
+    $result = Invoke-PixelForgeOp -Op "zombiestep" -NewFrame
+    PF-Cmd "setfps 6" | Out-Null
+    return $result
+}
+
 function PF-Clear    { PF-Cmd "clear" }
 function PF-AddFrame { PF-Cmd "addframe" }
 function PF-NextFrame{ PF-Cmd "nextframe" }

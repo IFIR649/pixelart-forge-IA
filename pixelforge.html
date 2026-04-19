@@ -39,14 +39,24 @@ input[type=number],select{width:100%;background:#0d0d1a;border:1px solid #0f3460
 .frame-thumb span{font-size:10px;color:#aaa}
 #anim-preview{padding:6px;border-bottom:1px solid #0f3460;display:none}
 #anim-preview canvas{border:1px solid #0f3460;display:block;margin:0 auto}
-.anim-ctrl{display:flex;gap:4px;margin-top:4px;justify-content:center}
+.anim-ctrl{display:flex;gap:4px;margin-top:4px;justify-content:center;align-items:center;flex-wrap:wrap}
 .anim-ctrl button{padding:2px 8px;font-size:10px;border:1px solid #0f3460;background:transparent;color:#aaa;cursor:pointer;font-family:monospace;border-radius:2px}
 .anim-ctrl button.active{background:#0f3460;color:#e2e2e2}
+.anim-status{font-size:10px;color:#888;text-align:center;margin-top:4px}
+.timeline-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;margin-top:5px}
+.timeline-actions button{padding:3px 0;font-size:10px;border:1px solid #0f3460;background:#0d0d1a;color:#aaa;cursor:pointer;font-family:monospace;border-radius:2px}
+.timeline-actions button:hover,.frame-mini:hover{border-color:#53a8d2;color:#e2e2e2}
 .cat-section{margin-bottom:8px}
 .cat-label{font-size:10px;color:#e94560;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center}
 .cat-label button{font-size:9px;border:1px solid #0f3460;background:transparent;color:#888;cursor:pointer;padding:1px 5px;border-radius:2px}
-#export-btn{width:100%;padding:5px;border:1px solid #e94560;background:transparent;color:#e94560;cursor:pointer;font-size:11px;border-radius:3px;font-family:monospace;margin-top:auto}
-#export-btn:hover{background:#e94560;color:#000}
+#export-panel{margin-top:auto;border-top:1px solid #0f3460;padding-top:6px}
+.export-row{display:flex;gap:4px;align-items:center;margin-bottom:4px}
+.export-row label,.check-row{font-size:10px;color:#888}
+.check-row{display:flex;align-items:center;gap:4px;margin-bottom:5px}
+.check-row input{accent-color:#e94560}
+.export-btn,#export-btn{width:100%;padding:5px;border:1px solid #e94560;background:transparent;color:#e94560;cursor:pointer;font-size:11px;border-radius:3px;font-family:monospace;margin-bottom:3px;text-align:center}
+.export-btn:hover,#export-btn:hover{background:#e94560;color:#000}
+.frame-mini{margin-left:auto;background:transparent;border:1px solid #0f3460;color:#888;cursor:pointer;font-family:monospace;font-size:10px;border-radius:2px;padding:1px 5px}
 #zoom-info{position:absolute;bottom:8px;right:8px;font-size:10px;color:#555;pointer-events:none}
 #coords-info{position:absolute;bottom:8px;left:8px;font-size:10px;color:#555;pointer-events:none}
 </style>
@@ -112,7 +122,21 @@ input[type=number],select{width:100%;background:#0d0d1a;border:1px solid #0f3460
         <button class="tool-btn" style="width:50%" onclick="changeZoom(2)">+</button>
       </div>
     </div>
-    <button id="export-btn" onclick="exportPNG()">EXPORT PNG</button>
+    <div id="export-panel">
+      <div class="panel-title">Export</div>
+      <div class="export-row">
+        <label for="export-max">Max</label>
+        <input type="number" id="export-max" min="1" max="2400" value="2400" onchange="setExportMax(this.value)" style="margin:0">
+      </div>
+      <label class="check-row"><input type="checkbox" id="export-bg" checked onchange="updateExportBg()"> BG actual</label>
+      <button id="export-btn" onclick="exportPNG()">Frame PNG</button>
+      <button class="export-btn" onclick="exportAllFrames()">All Frames</button>
+      <div class="export-row">
+        <label for="sheet-cols">Cols</label>
+        <input type="number" id="sheet-cols" min="1" max="64" value="4" style="margin:0">
+      </div>
+      <button class="export-btn" onclick="exportSpriteSheet()">Spritesheet</button>
+    </div>
   </div>
 
   <div id="canvas-area">
@@ -130,6 +154,13 @@ input[type=number],select{width:100%;background:#0d0d1a;border:1px solid #0f3460
         <button id="btn-play" onclick="togglePlay()">▶ Play</button>
         <span style="font-size:10px;color:#888">FPS:</span>
         <input type="number" id="fps-input" value="8" min="1" max="60" style="width:40px;margin:0" onchange="updateFPS()">
+      </div>
+      <div id="anim-status" class="anim-status">Frame 1 / 1</div>
+      <div class="timeline-actions">
+        <button onclick="moveFrameLeft()" title="Move frame left">&lt;</button>
+        <button onclick="duplicateFrame()" title="Duplicate frame">Dup</button>
+        <button onclick="deleteFrame(currentFrame)" title="Delete frame">Del</button>
+        <button onclick="moveFrameRight()" title="Move frame right">&gt;</button>
       </div>
     </div>
     <div id="frames-panel">
@@ -168,6 +199,7 @@ let frames=[], currentFrame=0;
 let categories=[{name:'idle',frames:[]}], currentCat=0;
 let animPlaying=false, animFrame=0, animTimer=null, fps=8;
 let startX=-1, startY=-1, previewPixels=null, clipboardPixels=null;
+let exportMax=2400, exportIncludeBg=true;
 
 const mc=document.getElementById('main-canvas');
 const gc=document.getElementById('grid-canvas');
@@ -653,8 +685,10 @@ function saveFrameData(){
     const cat=categories[currentCat];
     cat.frames[currentFrame]=data;
     updateFrameThumb(currentFrame);
-    if(animPlaying) updateAnimPreview();
+    if(!animPlaying)animFrame=currentFrame;
+    updateAnimPreview();
   }
+  updateAnimStatus();
 }
 
 function setTool(t){
@@ -711,7 +745,28 @@ function setMode(m){
   document.getElementById('pixelart-controls').style.display=m==='pixelart'?'block':'none';
   document.getElementById('anim-preview').style.display=m==='sprite'?'block':'none';
   if(m==='sprite'){renderCats();} else renderFrameList();
+  updateAnimStatus();
+  updateAnimPreview();
   log('Mode: '+m,'info');
+}
+
+function getActiveFrameList(){
+  return mode==='pixelart'?frames:(categories[currentCat]?.frames||[]);
+}
+
+function getActiveExportName(){
+  if(mode==='sprite')return categories[currentCat]?.name||'sprite';
+  return 'pixelart';
+}
+
+function loadActiveFrame(i){
+  if(mode==='sprite')loadSpriteFrame(i);
+  else loadFrame(i);
+}
+
+function cloneImageData(imgData){
+  if(!imgData)return null;
+  return new ImageData(new Uint8ClampedArray(imgData.data),imgData.width,imgData.height);
 }
 
 function addFrame(silent=false){
@@ -730,23 +785,27 @@ function addFrame(silent=false){
 }
 
 function loadFrame(i){
-  currentFrame=i;
+  const list=getActiveFrameList();
+  if(!list.length)return;
+  currentFrame=Math.max(0,Math.min(parseInt(i)||0,list.length-1));
   ctx.clearRect(0,0,gridSize,gridSize);
-  if(mode==='pixelart'&&frames[i]){
-    ctx.putImageData(frames[i],0,0);
+  if(mode==='pixelart'&&frames[currentFrame]){
+    ctx.putImageData(frames[currentFrame],0,0);
   } else if(mode==='sprite'){
-    const d=categories[currentCat]?.frames[i];
+    const d=categories[currentCat]?.frames[currentFrame];
     if(d)ctx.putImageData(d,0,0);
   }
-  renderFrameList();
+  if(mode==='pixelart')renderFrameList();
+  else {
+    animFrame=currentFrame;
+    renderCats();
+    updateAnimPreview();
+  }
+  updateAnimStatus();
 }
 
 function loadSpriteFrame(i){
-  currentFrame=i;
-  ctx.clearRect(0,0,gridSize,gridSize);
-  const d=categories[currentCat]?.frames[i];
-  if(d)ctx.putImageData(d,0,0);
-  renderCats();
+  loadFrame(i);
 }
 
 function renderFrameList(){
@@ -762,12 +821,15 @@ function renderFrameList(){
     const s=document.createElement('span');
     s.textContent='Frame '+(i+1);
     const del=document.createElement('button');
-    del.textContent='x'; del.style.cssText='margin-left:auto;background:transparent;border:none;color:#e94560;cursor:pointer;font-family:monospace';
+    del.textContent='x';
+    del.className='frame-mini';
+    del.title='Delete frame';
     del.onclick=e=>{e.stopPropagation();deleteFrame(i);};
     row.appendChild(c); row.appendChild(s); row.appendChild(del);
     row.addEventListener('click',()=>loadFrame(i));
     list.appendChild(row);
   });
+  updateAnimStatus();
 }
 
 function scaleImageData(imgData,size){
@@ -788,12 +850,58 @@ function updateFrameThumb(i){
 }
 
 function deleteFrame(i){
+  const list=getActiveFrameList();
+  if(!list.length)return;
+  i=parseInt(i);
+  if(isNaN(i))i=currentFrame;
+  if(i<0||i>=list.length){log('Frame out of range','err');return;}
   if(mode==='pixelart'){
-    frames.splice(i,1);
-    if(!frames.length)frames.push(null);
-    currentFrame=Math.min(currentFrame,frames.length-1);
-    loadFrame(currentFrame);
+    if(frames.length===1)frames[0]=null;
+    else frames.splice(i,1);
+  } else {
+    const cat=categories[currentCat];
+    if(cat.frames.length===1)cat.frames[0]=null;
+    else cat.frames.splice(i,1);
   }
+  currentFrame=Math.min(i,getActiveFrameList().length-1);
+  loadActiveFrame(currentFrame);
+  log('Frame deleted','ok');
+}
+
+function duplicateFrame(){
+  saveFrameData();
+  const list=getActiveFrameList();
+  if(!list.length)return;
+  const copy=cloneImageData(list[currentFrame]);
+  list.splice(currentFrame+1,0,copy);
+  loadActiveFrame(currentFrame+1);
+  log('Frame duplicated','ok');
+}
+
+function moveFrame(from,to){
+  const list=getActiveFrameList();
+  from=parseInt(from);to=parseInt(to);
+  if(isNaN(from)||isNaN(to)){log('Usage: moveframe <from> <to>','err');return false;}
+  from-=1;to-=1;
+  if(from<0||from>=list.length||to<0||to>=list.length){log('Frame out of range','err');return false;}
+  if(from===to)return true;
+  saveFrameData();
+  const item=list.splice(from,1)[0];
+  list.splice(to,0,item);
+  loadActiveFrame(to);
+  log('Frame moved '+(from+1)+' -> '+(to+1),'ok');
+  return true;
+}
+
+function moveFrameLeft(){
+  if(currentFrame<=0){log('Already at first frame','err');return;}
+  moveFrame(currentFrame+1,currentFrame);
+}
+
+function moveFrameRight(){
+  const list=getActiveFrameList();
+  if(currentFrame>=list.length-1){log('Already at last frame','err');return;}
+  moveFrame(currentFrame+1,currentFrame+2);
 }
 
 function addCategory(){
@@ -831,12 +939,18 @@ function renderCats(){
       if(f) c.getContext('2d').putImageData(scaleImageData(f,32),0,0);
       const s=document.createElement('span');
       s.textContent=cat.name+'.'+(fi+1);
-      row.appendChild(c); row.appendChild(s);
+      const del=document.createElement('button');
+      del.textContent='x';
+      del.className='frame-mini';
+      del.title='Delete frame';
+      del.onclick=e=>{e.stopPropagation();currentCat=ci;deleteFrame(fi);};
+      row.appendChild(c); row.appendChild(s); row.appendChild(del);
       row.addEventListener('click',()=>{currentCat=ci;loadSpriteFrame(fi);});
       sec.appendChild(row);
     });
     list.appendChild(sec);
   });
+  updateAnimStatus();
 }
 
 function togglePlay(){
@@ -857,11 +971,31 @@ function startAnim(){
 
 function stopAnim(){clearInterval(animTimer);}
 
-function updateFPS(){fps=parseInt(document.getElementById('fps-input').value)||8;if(animPlaying){stopAnim();startAnim();}}
+function setFPSValue(value){
+  const n=parseInt(value);
+  if(isNaN(n)||n<1||n>60){log('Usage: setfps <1-60>','err');return false;}
+  fps=n;
+  const input=document.getElementById('fps-input');
+  if(input)input.value=fps;
+  if(animPlaying){stopAnim();startAnim();}
+  updateAnimStatus();
+  return true;
+}
+
+function updateFPS(){setFPSValue(document.getElementById('fps-input').value);}
+
+function updateAnimStatus(){
+  const el=document.getElementById('anim-status');
+  if(!el)return;
+  const list=getActiveFrameList();
+  const count=list.length||1;
+  el.textContent='Frame '+(Math.min(currentFrame+1,count))+' / '+count+' · '+fps+' FPS';
+}
 
 function updateAnimPreview(){
   const cat=categories[currentCat];
   if(!cat)return;
+  if(!animPlaying)animFrame=currentFrame;
   const f=cat.frames[animFrame];
   pvctx.clearRect(0,0,64,64);
   if(f){
@@ -879,17 +1013,166 @@ function clearCanvas(){
   log('Canvas cleared','info');
 }
 
+function setExportMax(value,silent=false){
+  const n=parseInt(value);
+  if(isNaN(n)||n<1||n>2400){
+    log('Usage: exportmax <1-2400>','err');
+    return false;
+  }
+  exportMax=n;
+  const input=document.getElementById('export-max');
+  if(input)input.value=exportMax;
+  if(!silent)log('Export max: '+exportMax+'px','ok');
+  return true;
+}
+
+function updateExportBg(){
+  const input=document.getElementById('export-bg');
+  exportIncludeBg=!input||input.checked;
+}
+
+function slugifyName(name){
+  const slug=String(name||'pixelforge').trim().replace(/[^\w.-]+/g,'_').replace(/^_+|_+$/g,'');
+  return slug||'pixelforge';
+}
+
+function padFrameNumber(i){
+  return String(i+1).padStart(3,'0');
+}
+
+function effectiveExportMax(){
+  return Math.max(gridSize,Math.min(2400,exportMax));
+}
+
+function frameExportScale(){
+  return Math.max(1,Math.floor(effectiveExportMax()/gridSize));
+}
+
+function renderFrameToCanvas(frameData,scale,includeBg=exportIncludeBg){
+  const base=document.createElement('canvas');
+  base.width=gridSize;
+  base.height=gridSize;
+  const bc=base.getContext('2d');
+  if(includeBg&&bgColor!=='transparent'){
+    bc.fillStyle=bgColor;
+    bc.fillRect(0,0,gridSize,gridSize);
+  }
+  if(frameData)bc.putImageData(frameData,0,0);
+  const out=document.createElement('canvas');
+  out.width=gridSize*scale;
+  out.height=gridSize*scale;
+  const oc=out.getContext('2d');
+  oc.imageSmoothingEnabled=false;
+  oc.drawImage(base,0,0,out.width,out.height);
+  return out;
+}
+
+function downloadCanvas(canvas,filename){
+  canvas.toBlob(blob=>{
+    if(!blob){log('Export failed: '+filename,'err');return;}
+    const a=document.createElement('a');
+    const url=URL.createObjectURL(blob);
+    a.download=filename;
+    a.href=url;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  },'image/png');
+}
+
 function exportPNG(){
-  const tmp=document.createElement('canvas');
-  tmp.width=gridSize; tmp.height=gridSize;
-  const tc=tmp.getContext('2d');
-  if(bgColor!=='transparent'){tc.fillStyle=bgColor;tc.fillRect(0,0,gridSize,gridSize);}
-  tc.drawImage(mc,0,0);
-  const a=document.createElement('a');
-  a.download='pixelforge_export.png';
-  a.href=tmp.toDataURL();
-  a.click();
-  log('Exported PNG','ok');
+  saveFrameData();
+  const list=getActiveFrameList();
+  const canvas=renderFrameToCanvas(list[currentFrame],frameExportScale());
+  downloadCanvas(canvas,slugifyName(getActiveExportName())+'_'+padFrameNumber(currentFrame)+'.png');
+  log('Exported frame PNG '+canvas.width+'x'+canvas.height,'ok');
+}
+
+function exportAllFrames(){
+  saveFrameData();
+  const list=getActiveFrameList();
+  if(!list.length){log('No frames to export','err');return;}
+  const scale=frameExportScale();
+  const name=slugifyName(getActiveExportName());
+  list.forEach((frame,i)=>{
+    const canvas=renderFrameToCanvas(frame,scale);
+    setTimeout(()=>downloadCanvas(canvas,name+'_'+padFrameNumber(i)+'.png'),i*120);
+  });
+  log('Exporting '+list.length+' PNG frames at '+(gridSize*scale)+'x'+(gridSize*scale),'ok');
+}
+
+function getSheetCols(){
+  const input=document.getElementById('sheet-cols');
+  const n=parseInt(input?.value);
+  if(isNaN(n)||n<1)return 1;
+  return Math.min(64,n);
+}
+
+function setSheetCols(value){
+  const n=parseInt(value);
+  if(isNaN(n)||n<1||n>64){log('Usage: spritesheet [cols 1-64] [max 1-2400]','err');return false;}
+  const input=document.getElementById('sheet-cols');
+  if(input)input.value=n;
+  return true;
+}
+
+function fitSheetLayout(count,requestedCols){
+  const max=effectiveExportMax();
+  const maxBaseCols=Math.max(1,Math.floor(max/gridSize));
+  let cols=Math.max(1,Math.min(requestedCols,count,maxBaseCols));
+  let rows=Math.ceil(count/cols);
+  if(rows*gridSize>max){
+    let best=null;
+    for(let c=1;c<=Math.min(count,maxBaseCols);c++){
+      const r=Math.ceil(count/c);
+      if(r*gridSize<=max){
+        best={cols:c,rows:r};
+        break;
+      }
+    }
+    if(!best)return null;
+    cols=best.cols;
+    rows=best.rows;
+  }
+  const baseW=cols*gridSize;
+  const baseH=rows*gridSize;
+  return {cols,rows,scale:Math.max(1,Math.floor(max/Math.max(baseW,baseH)))};
+}
+
+function exportSpriteSheet(){
+  saveFrameData();
+  const list=getActiveFrameList();
+  if(!list.length){log('No frames to export','err');return;}
+  const layout=fitSheetLayout(list.length,getSheetCols());
+  if(!layout){log('Spritesheet exceeds '+exportMax+'px at 1x; export fewer frames or a smaller canvas','err');return;}
+  const cell=gridSize*layout.scale;
+  const sheet=document.createElement('canvas');
+  sheet.width=layout.cols*cell;
+  sheet.height=layout.rows*cell;
+  const sc=sheet.getContext('2d');
+  sc.imageSmoothingEnabled=false;
+  if(exportIncludeBg&&bgColor!=='transparent'){
+    sc.fillStyle=bgColor;
+    sc.fillRect(0,0,sheet.width,sheet.height);
+  }
+  list.forEach((frame,i)=>{
+    const x=(i%layout.cols)*cell;
+    const y=Math.floor(i/layout.cols)*cell;
+    sc.drawImage(renderFrameToCanvas(frame,layout.scale,false),x,y);
+  });
+  downloadCanvas(sheet,slugifyName(getActiveExportName())+'_sheet.png');
+  log('Exported spritesheet '+sheet.width+'x'+sheet.height+' cols '+layout.cols,'ok');
+}
+
+function selectExportCategory(name){
+  if(!name||mode!=='sprite')return true;
+  const i=categories.findIndex(c=>c.name===name);
+  if(i<0){log('Category not found: '+name,'err');return false;}
+  saveFrameData();
+  currentCat=i;
+  loadSpriteFrame(0);
+  return true;
 }
 
 function captureId(raw){
@@ -937,6 +1220,7 @@ function capturePayload(id){
     currentAlpha,
     brushSize,
     strokeSize,
+    exportMax,
     tool,
     frameCount:list.length,
     categories:categories.map(c=>c.name),
@@ -1004,6 +1288,99 @@ function applyPixelMatrix(rows){
   saveFrameData();
 }
 
+function clonePixelRows(rows){
+  return rows.map(row=>row.slice());
+}
+
+function pixelNeighbors(rows,x,y){
+  const out=[];
+  for(let yy=y-1;yy<=y+1;yy++){
+    for(let xx=x-1;xx<=x+1;xx++){
+      if(xx===x&&yy===y)continue;
+      if(yy<0||xx<0||yy>=rows.length||xx>=rows[yy].length)continue;
+      if(rows[yy][xx])out.push(rows[yy][xx]);
+    }
+  }
+  return out;
+}
+
+function majorityColor(colors){
+  const counts=new Map();
+  colors.forEach(c=>counts.set(c,(counts.get(c)||0)+1));
+  let best=null,bestCount=0;
+  counts.forEach((count,color)=>{
+    if(count>bestCount){best=color;bestCount=count;}
+  });
+  return {color:best,count:bestCount};
+}
+
+function smoothPixelRows(rows,passes=1){
+  let current=clonePixelRows(rows);
+  const h=current.length,w=current[0]?.length||0;
+  for(let pass=0;pass<passes;pass++){
+    const next=clonePixelRows(current);
+    for(let y=0;y<h;y++){
+      for(let x=0;x<w;x++){
+        const neighbors=pixelNeighbors(current,x,y);
+        const majority=majorityColor(neighbors);
+        if(!current[y][x]&&majority.count>=5)next[y][x]=majority.color;
+        else if(current[y][x]&&majority.color&&majority.count>=6&&majority.color!==current[y][x])next[y][x]=majority.color;
+        else if(current[y][x]&&neighbors.length<=1)next[y][x]=null;
+      }
+    }
+    current=next;
+  }
+  return current;
+}
+
+function despecklePixelRows(rows,minSize=2){
+  const h=rows.length,w=rows[0]?.length||0;
+  const out=clonePixelRows(rows);
+  const seen=Array.from({length:h},()=>Array(w).fill(false));
+  const dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      if(seen[y][x]||!rows[y][x])continue;
+      const stack=[[x,y]],component=[];
+      seen[y][x]=true;
+      while(stack.length){
+        const [cx,cy]=stack.pop();
+        component.push([cx,cy]);
+        dirs.forEach(([dx,dy])=>{
+          const nx=cx+dx,ny=cy+dy;
+          if(nx<0||ny<0||nx>=w||ny>=h||seen[ny][nx]||!rows[ny][nx])return;
+          seen[ny][nx]=true;
+          stack.push([nx,ny]);
+        });
+      }
+      if(component.length<minSize)component.forEach(([cx,cy])=>{out[cy][cx]=null;});
+    }
+  }
+  return out;
+}
+
+function outlinePixelRows(rows,color){
+  const h=rows.length,w=rows[0]?.length||0;
+  const out=clonePixelRows(rows);
+  const dirs=[[1,0],[-1,0],[0,1],[0,-1]];
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      if(!rows[y][x])continue;
+      dirs.forEach(([dx,dy])=>{
+        const nx=x+dx,ny=y+dy;
+        if(nx>=0&&ny>=0&&nx<w&&ny<h&&!rows[ny][nx])out[ny][nx]=color;
+      });
+    }
+  }
+  return out;
+}
+
+function applyRowsOperation(rows){
+  applyPixelMatrix(rows);
+  renderFrameList();
+  renderCats();
+}
+
 function applyLoadedState(state){
   if(!state||typeof state!=='object')throw new Error('Estado inválido');
   const size=parseIntValue(state.gridSize);
@@ -1026,6 +1403,7 @@ function applyLoadedState(state){
   }
   if(Number.isFinite(parseIntValue(state.brushSize)))brushSize=Math.max(1,Math.min(32,parseIntValue(state.brushSize)));
   if(Number.isFinite(parseIntValue(state.strokeSize)))strokeSize=Math.max(1,Math.min(32,parseIntValue(state.strokeSize)));
+  if(Number.isFinite(parseIntValue(state.exportMax)))setExportMax(Math.max(1,Math.min(2400,parseIntValue(state.exportMax))),true);
   applyPixelMatrix(state.pixels);
   renderFrameList();
   renderCats();
@@ -1040,9 +1418,23 @@ function log(msg,type='ok'){
   d.scrollTop=d.scrollHeight;
 }
 
+function applyExportCommandArgs(args,{cols=false}={}){
+  const rest=[...args];
+  if(mode==='sprite'&&rest.length&&isNaN(parseInt(rest[0]))){
+    if(!selectExportCategory(rest.shift()))return false;
+  }
+  if(cols&&rest.length){
+    if(!setSheetCols(rest.shift()))return false;
+  }
+  if(rest.length){
+    if(!setExportMax(rest.shift()))return false;
+  }
+  return true;
+}
+
 const COMMANDS={
   help:()=>{
-    log('Commands: help, clear, color <hex>, alpha <0-255>, brush <1-32>, stroke <1-32>, setpixel, dot, block, rectxy, fillcircle, ellipse, fillellipse, polyline, polygon, fillpoly, arc, curve, gradient, copy, paste, translate, mirrorx, mirrory, rotate90, loadstate, getpixel, fill, drawline, drawrect, fillrect, circle, frames, modes, export, snapshot, statepush','info');
+    log('Commands: help, clear, color <hex>, alpha <0-255>, brush <1-32>, stroke <1-32>, setpixel, dot, block, rectxy, fillcircle, ellipse, fillellipse, polyline, polygon, fillpoly, arc, curve, gradient, copy, paste, translate, mirrorx, mirrory, rotate90, cloneframe, smoothpixels, despeckle, outline, loadpixels, loadstate, getpixel, fill, drawline, drawrect, fillrect, circle, addframe, dupframe, delframe, moveframe, setfps, export, exportframe, exportall, spritesheet, exportmax, snapshot, statepush','info');
   },
   clear:()=>clearCanvas(),
   color:([hex])=>{if(!hex){log('Usage: color <hex>','err');return;}setColor(hex);log('Color: '+hex,'ok');},
@@ -1126,24 +1518,35 @@ const COMMANDS={
     log('Rect ('+x0+','+y0+') -> ('+x1+','+y1+')','ok');
   },
   addframe:()=>addFrame(),
+  cloneframe:()=>duplicateFrame(),
+  dupframe:()=>duplicateFrame(),
+  delframe:([n])=>{
+    const i=n?parseInt(n)-1:currentFrame;
+    if(n&&isNaN(i)){log('Usage: delframe [index]','err');return;}
+    deleteFrame(i);
+  },
+  moveframe:([from,to])=>moveFrame(from,to),
+  setfps:([n])=>{
+    if(setFPSValue(n))log('FPS: '+fps,'ok');
+  },
   nextframe:()=>{
-    const list=mode==='pixelart'?frames:categories[currentCat].frames;
-    if(currentFrame<list.length-1)loadFrame(currentFrame+1);
+    const list=getActiveFrameList();
+    if(currentFrame<list.length-1)loadActiveFrame(currentFrame+1);
     else log('Already at last frame','err');
   },
   prevframe:()=>{
-    if(currentFrame>0)loadFrame(currentFrame-1);
+    if(currentFrame>0)loadActiveFrame(currentFrame-1);
     else log('Already at first frame','err');
   },
   listframes:()=>{
-    const list=mode==='pixelart'?frames:categories[currentCat].frames;
+    const list=getActiveFrameList();
     log(list.length+' frames. Current: '+(currentFrame+1),'info');
   },
   setframe:([n])=>{
     const i=parseInt(n)-1;
-    const list=mode==='pixelart'?frames:categories[currentCat].frames;
+    const list=getActiveFrameList();
     if(i<0||i>=list.length){log('Frame out of range','err');return;}
-    loadFrame(i);
+    loadActiveFrame(i);
     log('Frame: '+(i+1),'ok');
   },
   setmode:([m])=>{
@@ -1183,6 +1586,10 @@ const COMMANDS={
     log('Zoom: '+zoom+'x','ok');
   },
   export:()=>exportPNG(),
+  exportframe:(args)=>{if(applyExportCommandArgs(args))exportPNG();},
+  exportall:(args)=>{if(applyExportCommandArgs(args))exportAllFrames();},
+  spritesheet:(args)=>{if(applyExportCommandArgs(args,{cols:true}))exportSpriteSheet();},
+  exportmax:([n])=>setExportMax(n),
   fillrect:([x0,y0,x1,y1,c])=>{
     [x0,y0,x1,y1]=[x0,y0,x1,y1].map(Number);
     if([x0,y0,x1,y1].some(isNaN)){log('Usage: fillrect <x0> <y0> <x1> <y1> [color]','err');return;}
@@ -1324,8 +1731,26 @@ const COMMANDS={
     saveFrameData();
     log('Rotate90 '+dir+' '+values[2]+'x'+values[3],'ok');
   },
+  smoothpixels:([passes='1'])=>{
+    const n=parseInt(passes);
+    if(isNaN(n)||n<1||n>8){log('Usage: smoothpixels [passes 1-8]','err');return;}
+    applyRowsOperation(smoothPixelRows(readPixelMatrix(),n));
+    log('Smoothpixels passes '+n,'ok');
+  },
+  despeckle:([minSize='2'])=>{
+    const n=parseInt(minSize);
+    if(isNaN(n)||n<1||n>64){log('Usage: despeckle [minSize 1-64]','err');return;}
+    applyRowsOperation(despecklePixelRows(readPixelMatrix(),n));
+    log('Despeckle min '+n,'ok');
+  },
+  outline:([color])=>{
+    const c=color||'#000000';
+    if(c!=='transparent'&&!c.startsWith('#')){log('Usage: outline <#hex>','err');return;}
+    applyRowsOperation(outlinePixelRows(readPixelMatrix(),c));
+    log('Outline '+c,'ok');
+  },
   getstate:()=>{
-    const state={mode,gridSize,currentColor,currentAlpha,brushSize,strokeSize,bgColor,currentFrame,tool,frameCount:mode==='pixelart'?frames.length:categories[currentCat]?.frames.length,categories:categories.map(c=>c.name)};
+    const state={mode,gridSize,currentColor,currentAlpha,brushSize,strokeSize,exportMax,bgColor,currentFrame,tool,frameCount:getActiveFrameList().length,categories:categories.map(c=>c.name)};
     log(JSON.stringify(state),'info');
   },
   setpixels:(args)=>{
@@ -1351,6 +1776,11 @@ const COMMANDS={
     const state=await fetchSavedState(id||'current');
     applyLoadedState(state);
     log('State loaded: '+(id||'current'),'ok');
+  },
+  loadpixels:async([id])=>{
+    const state=await fetchSavedState(id||'current');
+    applyRowsOperation(state.pixels);
+    log('Pixels loaded: '+(id||'current'),'ok');
   }
 };
 
